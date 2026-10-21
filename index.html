@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cono check</title>
+<style>
+  :root {
+    --desk: #1e1b17;
+    --surface: #2a2621;
+    --line: #3a342c;
+    --paper: #f2ede3;
+    --faded: #a89c8a;
+    --lamp: #e0a62e;
+    --leaf: #93b578;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { height: 100%; }
+  body {
+    min-height: 100%;
+    background: var(--desk);
+    color: var(--paper);
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+  }
+  a { color: inherit; }
+  button { font: inherit; }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 18px 26px 10px;
+  }
+  header h1 { font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
+  header .demo-mark { color: var(--faded); font-size: 14px; }
+  header .status { color: var(--faded); font-size: 14px; }
+  header .status b { color: var(--lamp); font-weight: 500; }
+  header .status b.calm { color: var(--faded); }
+  .lampdot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--faded);
+    margin-right: 7px;
+    vertical-align: 1px;
+  }
+  .lampdot.checking { background: var(--lamp); animation: breathe 1.6s ease-in-out infinite; }
+  .lampdot.writing { background: var(--lamp); }
+  .lampdot.paused { background: var(--line); }
+  @keyframes breathe { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .lampdot.checking { animation: none; } }
+
+  #banner {
+    display: none;
+    margin: 0 26px 8px;
+    padding: 7px 14px;
+    border: 1px solid var(--lamp);
+    border-radius: 4px;
+    color: var(--lamp);
+    font-size: 13.5px;
+  }
+  #banner.on { display: block; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(300px, 5fr);
+    gap: 26px;
+    padding: 6px 26px 30px;
+    max-width: 1340px;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    .stage { padding: 16px; }
+  }
+
+  /* the pool of lamplight: the live page */
+  .stage {
+    position: relative;
+    align-self: start;
+    border-radius: 6px;
+    padding: 34px;
+    background: radial-gradient(85% 90% at 50% 38%,
+                rgba(224, 166, 46, 0.16), rgba(224, 166, 46, 0.035) 58%, transparent 78%);
+    transition: background 0.6s;
+  }
+  body.paused .stage { background: none; }
+  .stage .frame-wrap { position: relative; }
+  .stage video, .stage img.replay {
+    display: block;
+    width: 100%;
+    border-radius: 4px;
+    box-shadow: 0 1px 0 rgba(242, 237, 227, 0.14) inset,
+                0 18px 50px -18px rgba(0, 0, 0, 0.75);
+    background: #15130f;
+    min-height: 220px;
+  }
+  .stage img.replay { position: absolute; inset: 0; transition: opacity 0.25s; }
+  .stage img.replay.under { position: static; }
+  @media (prefers-reduced-motion: reduce) { .stage img.replay { transition: none; } }
+  .stage .snapring {
+    position: absolute; inset: -2px;
+    border: 2px solid var(--lamp);
+    border-radius: 6px;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .stage .snapring.fire { animation: ringpulse 0.3s ease-out; }
+  @keyframes ringpulse { 0% { opacity: 0.9; } 100% { opacity: 0; } }
+  .stage .offline {
+    display: none;
+    padding: 70px 30px;
+    text-align: center;
+    color: var(--faded);
+    background: var(--surface);
+    border-radius: 4px;
+    min-height: 220px;
+  }
+  .stage .offline h2 { color: var(--paper); font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .stage .offline p { max-width: 44ch; margin: 0 auto 14px; }
+  .stage figcaption {
+    margin-top: 12px;
+    text-align: center;
+    color: var(--faded);
+    font-size: 13.5px;
+  }
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+  }
+  .pill {
+    color: var(--paper);
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 20px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .pill:hover { border-color: var(--lamp); color: var(--lamp); }
+  .pill:disabled { color: var(--faded); border-color: var(--line); cursor: default; }
+  .pill.resume { border-color: var(--lamp); color: var(--lamp); }
+  .quiet {
+    background: none;
+    border: none;
+    color: var(--faded);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 4px 2px;
+  }
+  .quiet:hover { color: var(--paper); }
+  select.camera {
+    background: none;
+    border: none;
+    color: var(--faded);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    max-width: 240px;
+  }
+  select.camera:hover { color: var(--paper); }
+  select.camera option { background: var(--surface); color: var(--paper); }
+  .pill:focus-visible, .quiet:focus-visible, select.camera:focus-visible,
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--lamp);
+    outline-offset: 2px;
+  }
+
+  /* margin notes: the checks */
+  .notes { min-width: 0; }
+  .notes .empty { color: var(--faded); padding: 40px 6px; max-width: 40ch; }
+  .check {
+    border-top: 1px solid var(--line);
+    padding: 16px 2px 20px;
+  }
+  .check:first-child { border-top: none; }
+  .check .meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--faded);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .check .meta img {
+    height: 56px;
+    border-radius: 4px;
+    display: block;
+  }
+  @media (max-width: 900px) { .check .meta img { height: 44px; } }
+  .check .meta .vis { color: var(--paper); }
+  .check .meta .vis.good { color: var(--leaf); }
+  .check .meta .vis.poor { color: var(--lamp); }
+  .check .onpage {
+    font-family: Charter, Georgia, serif;
+    font-size: 15.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    border-left: 2px solid var(--line);
+    padding: 2px 0 2px 14px;
+    margin: 10px 0;
+    max-width: 60ch;
+  }
+  .check .verdict { max-width: 54ch; }
+  .check .verdict::before { content: "✎ "; color: var(--lamp); }
+  .check .visnote { color: var(--faded); font-size: 13.5px; max-width: 54ch; margin-top: 8px; }
+  .check .retry { color: var(--lamp); cursor: pointer; background: none; border: none; font-size: 14px; padding: 0; text-decoration: underline; }
+  .check.pending .reading { color: var(--faded); }
+  .check.pending .slow { color: var(--faded); font-size: 13.5px; margin-top: 6px; }
+  details.older { margin-top: 10px; }
+  details.older summary {
+    cursor: pointer;
+    color: var(--faded);
+    font-size: 13.5px;
+    padding: 8px 2px;
+  }
+
+  .flier {
+    position: fixed;
+    border-radius: 4px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    pointer-events: none;
+    z-index: 10;
+    transition: all 0.4s ease-out;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cono check</h1>
+  <span class="demo-mark" id="demomark" hidden>demo</span>
+  <span class="status"><span class="lampdot" id="lamp"></span><b id="statusword" class="calm">starting</b><span id="statusrest"></span></span>
+</header>
+
+<div id="banner" role="status">Lost the local server — restart cono-check in your terminal.</div>
+
+<main>
+  <figure class="stage" id="stage">
+    <div class="frame-wrap" id="framewrap">
+      <video id="video" autoplay playsinline muted hidden></video>
+      <div class="offline" id="offline"></div>
+      <div class="snapring" id="snapring"></div>
+    </div>
+    <figcaption id="caption">Starting…</figcaption>
+    <div class="controls">
+      <button class="pill" id="checknow" type="button" disabled>Check now</button>
+      <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
+      <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
+    </div>
+  </figure>
+
+  <section class="notes" aria-live="polite">
+    <div id="feed">
+      <p class="empty" id="empty">Put your work in front of the camera — holding the
+      page up works well. When you pause writing, Cono snaps a picture, reads it, and
+      leaves a note here. It points at mistakes and asks a question; it won't hand you
+      the answer.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  // gating — same numbers as the recorded-session pipeline
+  const DIRTY_AT = 0.20, STABLE_AT = 0.10, PIXEL_STEP = 24;
+  const GATE_MS = 250, FIRST_LOOK_MS = 2000, MAX_DIRTY_MS = 20000, GATE_W = 160, GATE_H = 120;
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const el = id => document.getElementById(id);
+  const esc = s => { const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; };
+
+  let mode = null;            // "live" | "replay"
+  let stream = null;
+  let paused = false;
+  let writing = false;        // client-side dirty state
+  let serverStatus = "watching";
+  let pending = [];           // snap ids we sent, awaiting their check
+  let manualPending = false;
+  let lastGate = null, dirtySince = 0, firstLookAt = 0, armed = false;
+  let lastFrameN = -1, checkCount = -1, failedAt = 0;
+  let replayTop = null, replayUnder = null;
+
+  // ---------- status line ----------
+  const statusText = {
+    watching: ["watching", " — write, then pause"],
+    writing:  ["you’re writing", " — will check when you pause"],
+    checking: ["reading your page", "…"],
+    paused:   ["paused", " — camera is off"],
+    starting: ["starting", ""],
+  };
+  function setStatus() {
+    const s = paused ? "paused" : serverStatus === "checking" ? "checking"
+            : writing ? "writing" : mode ? "watching" : "starting";
+    const [word, rest] = statusText[s];
+    el("statusword").textContent = word;
+    el("statusword").className = (s === "watching" || s === "paused" || s === "starting") ? "calm" : "";
+    el("statusrest").textContent = rest;
+    el("lamp").className = "lampdot " + s;
+    el("checknow").disabled = paused || !mode || (manualPending && serverStatus === "checking");
+  }
+
+  // ---------- camera (live mode) ----------
+  async function startCamera() {
+    const saved = localStorage.getItem("cono-camera") || undefined;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: saved ? { exact: saved } : undefined,
+                 width: { ideal: 1920 }, height: { ideal: 1440 } },
+      });
+    } catch (e) {
+      if (saved && e.name === "OverconstrainedError") {
+        localStorage.removeItem("cono-camera");
+        return startCamera();
+      }
+      return showOffline(e.name === "NotFoundError"
+        ? ["No camera found.", "An iPhone near your Mac shows up as a camera here — unlock it and check the picker."]
+        : ["Cono needs your camera.", "Your browser blocked camera access for this page. Allow it — usually the camera icon in the address bar — then try again."], true);
+    }
+    el("offline").style.display = "none";
+    el("video").hidden = false;
+    el("video").srcObject = stream;
+    document.body.classList.remove("paused");
+    el("pausebtn").textContent = "Pause camera";
+    el("pausebtn").className = "quiet";
+    el("caption").textContent = "Live video stays on this page. Only the snapshots on the right are read by Claude.";
+    lastGate = null; dirtySince = 0; armed = false;
+    firstLookAt = performance.now() + FIRST_LOOK_MS;
+    fillPicker();
+  }
+
+  function showOffline([head, body], retry) {
+    const o = el("offline");
+    o.innerHTML = `<h2>${esc(head)}</h2><p>${esc(body)}</p>` +
+                  (retry ? `<button class="pill" id="retrycam" type="button">Try again</button>` : "");
+    o.style.display = "block";
+    el("video").hidden = true;
+    if (retry) el("retrycam").onclick = startCamera;
+  }
+
+  async function fillPicker() {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    const pick = el("camerapick");
+    pick.hidden = devices.length < 2 && !devices[0]?.label;
+    const current = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+    pick.innerHTML = devices.map(d =>
+      `<option value="${esc(d.deviceId)}" ${d.deviceId === current ? "selected" : ""}>Camera: ${esc(d.label || "default")}</option>`).join("");
+  }
+
+  el("camerapick").addEventListener("change", () => {
+    localStorage.setItem("cono-camera", el("camerapick").value);
+    stopTracks();
+    startCamera();
+  });
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => { if (mode === "live" && !paused) fillPicker(); });
+
+  function stopTracks() { stream?.getTracks().forEach(t => t.stop()); stream = null; }
+
+  el("pausebtn").addEventListener("click", () => {
+    paused = !paused;
+    if (paused) {
+      stopTracks();
+      document.body.classList.add("paused");
+      el("pausebtn").textContent = "Resume camera";
+      el("pausebtn").className = "pill resume";
+      showOffline(["Camera is off.", "Nothing is watched or sent."], false);
+      el("caption").textContent = "";
+      writing = false;
+      setStatus();
+    } else {
+      startCamera().then(setStatus);
+    }
+  });
+
+  // ---------- gating + snaps (live mode) ----------
+  const gateCanvas = document.createElement("canvas");
+  gateCanvas.width = GATE_W; gateCanvas.height = GATE_H;
+  const gateCtx = gateCanvas.getContext("2d", { willReadFrequently: true });
+
+  function gateTick() {
+    if (mode !== "live" || paused || !stream || el("video").readyState < 2) return;
+    gateCtx.drawImage(el("video"), 0, 0, GATE_W, GATE_H);
+    const px = gateCtx.getImageData(0, 0, GATE_W, GATE_H).data;
+    const gray = new Uint8Array(GATE_W * GATE_H);
+    for (let i = 0; i < gray.length; i++)
+      gray[i] = (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2]) / 3;
+    let changed = null;
+    if (lastGate) {
+      let n = 0;
+      for (let i = 0; i < gray.length; i++)
+        if (Math.abs(gray[i] - lastGate[i]) > PIXEL_STEP) n++;
+      changed = n / gray.length;
+    }
+    lastGate = gray;
+    const now = performance.now();
+    if (changed !== null && changed > DIRTY_AT) { if (!dirtySince) dirtySince = now; writing = true; }
+    if (!armed && now >= firstLookAt) { armed = true; snap("first look"); }
+    else if (dirtySince && changed !== null && changed < STABLE_AT) { dirtySince = 0; writing = false; snap("page settled"); }
+    else if (dirtySince && now - dirtySince > MAX_DIRTY_MS) { dirtySince = now; snap("checking in"); }
+    if (changed !== null && changed < STABLE_AT && !dirtySince) writing = false;
+    setStatus();
+  }
+  setInterval(gateTick, GATE_MS);
+
+  async function snap(reason) {
+    const v = el("video");
+    if (!v.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
+    const resp = await fetch("/snap?reason=" + encodeURIComponent(reason), { method: "POST", body: blob }).catch(() => null);
+    if (!resp?.ok) return;
+    const { id } = await resp.json();
+    pending.push({ id, reason, at: Date.now() });
+    if (reason === "asked") manualPending = true;
+    snapMoment(id);
+    renderFeed(lastChecks);
+  }
+
+  function snapMoment(id) {
+    if (reduceMotion) return;
+    const ring = el("snapring");
+    ring.classList.remove("fire"); void ring.offsetWidth; ring.classList.add("fire");
+    const v = el("video").getBoundingClientRect();
+    const feed = el("feed").getBoundingClientRect();
+    const f = document.createElement("img");
+    f.className = "flier";
+    f.src = "/snap/" + id;
+    Object.assign(f.style, { left: v.left + "px", top: v.top + "px", width: v.width + "px", height: v.height + "px" });
+    document.body.appendChild(f);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      Object.assign(f.style, { left: feed.left + "px", top: (feed.top + window.scrollY - window.scrollY) + "px", width: "75px", height: "56px", opacity: 0.4 });
+    }));
+    setTimeout(() => f.remove(), 450);
+  }
+
+  // ---------- replay mode stage ----------
+  function showReplayFrame(state) {
+    if (!replayTop) {
+      replayUnder = document.createElement("img");
+      replayUnder.className = "replay under";
+      replayTop = document.createElement("img");
+      replayTop.className = "replay";
+      replayTop.style.opacity = 0;
+      el("framewrap").prepend(replayTop);
+      el("framewrap").prepend(replayUnder);
+      replayUnder.alt = "Replayed frame of the page";
+      replayTop.alt = "";
+    }
+    const src = "/snap/" + state.frame + "?n=" + state.frame_n;
+    if (!replayUnder.getAttribute("src")) { replayUnder.src = src; return; }
+    replayTop.src = src;
+    replayTop.onload = () => {
+      replayTop.style.opacity = 1;
+      setTimeout(() => { replayUnder.src = replayTop.src; replayTop.style.opacity = 0; }, 300);
+    };
+  }
+
+  // ---------- notes column ----------
+  let lastChecks = [];
+  function checkHTML(c) {
+    const vis = c.visibility == null ? "" :
+      `<span class="vis ${c.visibility >= 7 ? "good" : c.visibility <= 4 ? "poor" : ""}">camera view ${c.visibility}/10</span>`;
+    const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img src="/snap/${esc(c.snap)}" alt="The snapshot Claude read"></a>` : "";
+    return `<article class="check">
+      <div class="meta">${thumb}<span>${vis}${vis ? " · " : ""}${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}</span></div>
+      ${c.on_page ? `<div class="onpage">${esc(c.on_page)}</div>` : ""}
+      ${c.check ? `<p class="verdict">${esc(c.check)}${c.failed ? ` <button class="retry" data-snap="${esc(c.snap)}">Retry</button>` : ""}</p>` : ""}
+      ${c.visibility_note && (c.visibility == null || c.visibility <= 6)
+        ? `<p class="visnote">${esc(c.visibility_note)}</p>` : ""}
+    </article>`;
+  }
+  function pendingHTML(p) {
+    const slow = Date.now() - p.at > 25000;
+    return `<article class="check pending">
+      <div class="meta"><a href="/snap/${esc(p.id)}" target="_blank" rel="noopener"><img src="/snap/${esc(p.id)}" alt="Snapshot being read"></a>
+      <span class="reading"><span class="lampdot checking"></span>Reading this snapshot…</span></div>
+      ${slow ? `<p class="slow">Still reading — the first check can take a minute.</p>` : ""}
+    </article>`;
+  }
+  function renderFeed(checks) {
+    lastChecks = checks;
+    const done = new Set(checks.map(c => c.snap));
+    pending = pending.filter(p => !done.has(p.id));
+    if (!pending.length) manualPending = false;
+    if (!checks.length && !pending.length) return;
+    const items = pending.map(pendingHTML).join("") + checks.slice(0, 3).map(checkHTML).join("");
+    const older = checks.slice(3);
+    el("feed").innerHTML = items + (older.length
+      ? `<details class="older"><summary>${older.length} earlier ${older.length === 1 ? "check" : "checks"}</summary>${older.map(checkHTML).join("")}</details>`
+      : "");
+    el("feed").querySelectorAll(".retry").forEach(b =>
+      b.addEventListener("click", () => fetch("/retry?snap=" + encodeURIComponent(b.dataset.snap), { method: "POST" })));
+  }
+
+  el("checknow").addEventListener("click", () => {
+    if (mode === "live") snap("asked");
+    else { manualPending = true; fetch("/check", { method: "POST" }); }
+  });
+
+  // ---------- state polling ----------
+  async function poll() {
+    let s;
+    try {
+      s = await (await fetch("/state")).json();
+      failedAt = 0;
+      el("banner").classList.remove("on");
+    } catch (e) {
+      failedAt = failedAt || Date.now();
+      if (Date.now() - failedAt > 5000) el("banner").classList.add("on");
+      return setTimeout(poll, 1000);
+    }
+    serverStatus = s.status;
+    if (!mode) {
+      mode = s.mode;
+      if (mode === "live") {
+        el("pausebtn").hidden = false;
+        startCamera();
+      } else {
+        el("demomark").hidden = false;
+        el("caption").textContent = "Replaying a recorded session — no camera in use.";
+        el("checknow").disabled = false;
+      }
+    }
+    if (mode === "replay") {
+      if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
+      if (s.status === "watching") manualPending = false;
+    }
+    if (s.checks.length !== checkCount || pending.length) {
+      checkCount = s.checks.length;
+      renderFeed(s.checks);
+    }
+    setStatus();
+    setTimeout(poll, 1000);
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
