@@ -175,6 +175,41 @@
 
   /* margin notes: the checks */
   .notes { min-width: 0; }
+  .ribbon {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 2px 12px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
+  .chip {
+    font-size: 13px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--leaf);
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .chip.mid { color: var(--lamp); }
+  .chip.poor { color: #e07a5a; border-color: #e07a5a; }
+  .workingon {
+    color: var(--faded);
+    font-size: 13.5px;
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .reframe {
+    color: var(--lamp);
+    font-size: 13.5px;
+    padding: 8px 2px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
   .notes .empty { color: var(--faded); padding: 40px 6px; max-width: 40ch; }
   .check {
     border-top: 1px solid var(--line);
@@ -294,6 +329,11 @@
   </figure>
 
   <section class="notes" aria-live="polite">
+    <div class="ribbon" id="ribbon" hidden>
+      <a class="chip" id="camchip" target="_blank" rel="noopener" title="Open the latest snapshot">camera –/10</a>
+      <span class="workingon" id="workingon"></span>
+    </div>
+    <div class="reframe" id="reframe" hidden></div>
     <div id="feed">
       <p class="empty" id="empty">Put your work in front of the camera — holding the
       page up works well. When you pause writing, Cono snaps a picture, reads it, and
@@ -526,6 +566,30 @@
 
   // ---------- notes column ----------
   let lastChecks = [];
+  let lastWorking = "";
+
+  function renderRibbon(checks) {
+    const latest = checks[0];
+    if (!latest || latest.visibility == null && !latest.working_on) return;
+    el("ribbon").hidden = false;
+    const v = latest.visibility;
+    const chip = el("camchip");
+    if (v != null) {
+      chip.textContent = `camera ${v}/10`;
+      chip.className = "chip" + (v >= 7 ? "" : v >= 5 ? " mid" : " poor");
+    }
+    if (latest.snap) chip.href = "/snap/" + latest.snap;
+    const w = latest.working_on || "";
+    if (latest.kind === "idle" || /^nothing new/i.test(w)) {
+      if (lastWorking) el("workingon").textContent = "still on: " + lastWorking;
+    } else if (w) {
+      lastWorking = w.toLowerCase();
+      el("workingon").textContent = "working on: " + lastWorking;
+    }
+    const note = (latest.visibility_note || "").split(/(?<=\.)\s/)[0];
+    el("reframe").hidden = !(v != null && v <= 4 && note);
+    if (!el("reframe").hidden) el("reframe").textContent = "Reframe: " + note;
+  }
   function checkHTML(c) {
     const vis = c.visibility == null ? "" :
       `<span class="vis ${c.visibility >= 7 ? "good" : c.visibility <= 4 ? "poor" : ""}">camera view ${c.visibility}/10</span>`;
@@ -548,6 +612,7 @@
   }
   function renderFeed(checks) {
     lastChecks = checks;
+    renderRibbon(checks);
     const done = new Set(checks.map(c => c.snap));
     pending = pending.filter(p => !done.has(p.id));
     if (!pending.length) manualPending = false;
