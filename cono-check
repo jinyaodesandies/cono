@@ -63,8 +63,8 @@ PROMPT = """You are Cono, an AI study tutor watching a student's paper through a
 Respond in EXACTLY this plain-text format, no markdown:
 
 VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts, fraction bars) are readable; note blur or glare.
-ON PAGE: transcribe what is written on the page exactly as written, preserving the student's own errors - never silently correct anything. If no page or writing is visible, say what IS visible instead.
-CHECK: {check_style} If nothing is readable, give one concrete tip to fix the framing."""
+ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. After transcribing, re-read the image once and fix only your transcription mistakes, never the student's math. If no page or writing is visible, say what IS visible instead.
+CHECK: {check_style} Refer to lines by their L-numbers. If nothing is readable, give one concrete tip to fix the framing."""
 
 # during a recorded session the CHECK paragraph rotates through these, so a
 # session also measures what KIND of help works; "question" is the default
@@ -75,6 +75,33 @@ CHECK_STYLES = {
     "next-step": "1-2 sentences. Do not hunt for errors. Say what a good next step from here would be - the kind of move to make, not the worked-out result. If the page is blank or barely started, suggest how to begin without giving the method away.",
 }
 STYLE_ORDER = ["question", "principle", "point", "next-step"]
+
+# live-session experiment: each check rotates through these configs, and
+# the manifest records which config produced which check. The snap cadence
+# also loosens through the session (watcher/gateTick: 5s → 12s → 20s floors).
+SESSION_CONFIGS = [
+    {"style": "question",  "structure": "single",  "width": 1280},
+    {"style": "principle", "structure": "single",  "width": 1280},
+    {"style": "point",     "structure": "single",  "width": 960},
+    {"style": "next-step", "structure": "single",  "width": 1280},
+    {"style": "question",  "structure": "twopass", "width": 1280},
+    {"style": "question",  "structure": "single",  "width": 1920},
+]
+
+TRANSCRIBE_PROMPT = """You are a transcription engine for a study tutor. Read the image file: {path}
+
+Respond in EXACTLY this plain-text format, no markdown:
+
+VISIBILITY: n/10 - one line: what the camera sees and whether small details are readable; note blur or glare.
+ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. If no page or writing is visible, say what IS visible instead."""
+
+REASON_PROMPT = """You are Cono, an AI study tutor. A faithful transcription of the student's handwritten page (their own errors preserved) is:
+
+{transcript}
+
+Respond in EXACTLY this plain-text format, no markdown:
+
+CHECK: {check_style} Refer to lines by their L-numbers."""
 
 
 class State:
@@ -144,11 +171,11 @@ class Session:
         self.event("start")
         return str(self.dir)
 
-    def next_style(self):
+    def next_config(self):
         with self.lock:
-            style = STYLE_ORDER[self.style_i % len(STYLE_ORDER)]
+            cfg = SESSION_CONFIGS[self.style_i % len(SESSION_CONFIGS)]
             self.style_i += 1
-            return style
+            return cfg
 
     def manifest(self, ended_early):
         frames = len(list((self.dir / "frames").glob("*.jpg")))
@@ -276,12 +303,23 @@ def parse_report(text):
     return out
 
 
-def run_claude(frame_path, model, style="question"):
-    r = subprocess.run(
-        ["claude", "-p", "--model", model, "--allowedTools=Read"],
-        input=PROMPT.format(path=frame_path, check_style=CHECK_STYLES[style]),
-        capture_output=True, text=True, timeout=180,
-    )
+def shrink_for_model(path, width=1280):
+    """What the model reads is a downscaled copy (cheaper tokens, no measured
+    quality loss in experiments/run1); the original stays on disk as ground
+    truth. Falls back to the original if sips is unavailable."""
+    if width >= 1920:
+        return path
+    small = path.with_name(f"{path.stem}-w{width}.jpg")
+    r = subprocess.run(["sips", "--resampleWidth", str(width), str(path), "--out", str(small)],
+                       capture_output=True)
+    return small if r.returncode == 0 and small.exists() else path
+
+
+def claude_call(prompt, model, read=True):
+    cmd = ["claude", "-p", "--model", model]
+    if read:
+        cmd.append("--allowedTools=Read")
+    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=180)
     return r.stdout.strip() or r.stderr.strip() or "(no response)"
 
 
@@ -291,14 +329,26 @@ def checker(frames_dir):
         with STATE.lock:
             STATE.status = "checking"
         in_session = SESSION.active
-        style = SESSION.next_style() if in_session else "question"
+        cfg = SESSION.next_config() if in_session else \
+            {"style": "question", "structure": "single", "width": 1280}
         t = SESSION.t() if in_session else None
         entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap, "reason": reason}
         t0 = time.time()
         raw = ""
         try:
-            raw = run_claude(frames_dir / snap, STATE.model, style)
-            entry.update(parse_report(raw))
+            send = shrink_for_model(frames_dir / snap, cfg["width"])
+            if cfg["structure"] == "twopass":
+                raw1 = claude_call(TRANSCRIBE_PROMPT.format(path=send), STATE.model)
+                entry.update(parse_report(raw1))
+                raw2 = claude_call(REASON_PROMPT.format(
+                    transcript=entry.get("on_page") or "(nothing transcribed)",
+                    check_style=CHECK_STYLES[cfg["style"]]), STATE.model, read=False)
+                entry["check"] = parse_report(raw2)["check"] or raw2
+                raw = raw1 + "\n--- pass 2 ---\n" + raw2
+            else:
+                raw = claude_call(PROMPT.format(path=send, check_style=CHECK_STYLES[cfg["style"]]),
+                                  STATE.model)
+                entry.update(parse_report(raw))
         except Exception:
             entry.update(visibility=None, visibility_note="", on_page="", failed=True,
                          check="Couldn't read this snapshot. Check that `claude` runs "
@@ -309,13 +359,14 @@ def checker(frames_dir):
                 shutil.copy(frames_dir / snap, SESSION.dir / "snaps" / snap)
             except OSError:
                 pass
-            record = {"t": t, "snap": snap, "reason": reason, "style": style,
-                      "latency_ms": latency, "visibility": entry.get("visibility"),
+            record = {"t": t, "snap": snap, "reason": reason, "config": cfg,
+                      "style": cfg["style"], "latency_ms": latency,
+                      "visibility": entry.get("visibility"),
                       "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
                       "raw": raw, "annotation": None}
             with SESSION.lock:
                 SESSION.checks.append(record)
-            SESSION.event("check_done", snap=snap, reason=reason, style=style,
+            SESSION.event("check_done", snap=snap, reason=reason, config=cfg,
                           latency_ms=latency, visibility=entry.get("visibility"))
         with STATE.lock:
             STATE.checks.insert(0, entry)
@@ -365,7 +416,12 @@ def watcher(log_path, frames_dir):
                 dirty = True
             settled = changed is not None and changed < STABLE_AT
             overdue = dirty and now - dirty_since > MAX_DIRTY_S
-            gap_ok = now - last_queued >= MIN_GAP_S
+            if SESSION.active:          # session experiment: cadence loosens in thirds
+                ts = SESSION.t() / 1000
+                min_gap = 5 if ts < 200 else 12 if ts < 400 else 20
+            else:
+                min_gap = MIN_GAP_S
+            gap_ok = now - last_queued >= min_gap
             if asap or not first_done or (dirty and (settled or overdue) and gap_ok):
                 reason = ("asked" if asap else "first look" if not first_done
                           else "page settled" if settled else "checking in")

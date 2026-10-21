@@ -442,7 +442,9 @@
       session.signal.push([Math.round(performance.now() - session.start), changed]);
     const now = performance.now();
     if (changed !== null && changed > DIRTY_AT) { if (!dirtySince) dirtySince = now; writing = true; }
-    const gapOk = now - lastSnapAt >= MIN_GAP_MS;
+    const elapsed = session ? (now - session.start) / 1000 : -1;
+    const minGap = session ? (elapsed < 200 ? 5000 : elapsed < 400 ? 12000 : 20000) : MIN_GAP_MS;
+    const gapOk = now - lastSnapAt >= minGap;
     if (!armed && now >= firstLookAt) { armed = true; lastSnapAt = now; snap("first look"); }
     else if (dirtySince && changed !== null && changed < STABLE_AT && gapOk) { dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
     else if (dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk) { dirtySince = now; lastSnapAt = now; snap("checking in"); }
