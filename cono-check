@@ -16,6 +16,7 @@ Usage:
   cono-check deskview            # the Mac's Desk View camera (top-down), via deskcap
   cono-check session             # 10-minute recorded session panel open (combines: deskview session)
   cono-check demo                # no camera needed: bundled sample session
+  cono-check doctor              # preflight: is everything ready to run?
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
   cono-check --port 9000
@@ -675,8 +676,57 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, b"not found", "text/plain")
 
 
+def doctor():
+    """Preflight for running in the real world (e.g. before class)."""
+    import tempfile
+    ok = True
+
+    def row(good, label, fix=""):
+        nonlocal ok
+        ok = ok and bool(good)
+        print(("  ✓ " if good else "  ✗ ") + label)
+        if not good and fix:
+            print(f"      → {fix}")
+
+    print("Cono check — preflight\n")
+    row(shutil.which("claude"), "claude CLI installed",
+        "install Claude Code (https://claude.com/claude-code), run `claude` once to log in")
+    row(shutil.which("sips"), "sips available (image downscaling)", "macOS built-in — are you on macOS?")
+    bin_ = None
+    try:
+        bin_ = ensure_deskcap()
+        row(True, "deskcap capture tool ready")
+    except SystemExit as e:
+        row(False, "deskcap capture tool ready", str(e))
+    if bin_:
+        r = subprocess.run([str(bin_), "--list"], capture_output=True, text=True, timeout=20)
+        has_dv = "deskviewcamera" in (r.stdout + r.stderr).lower()
+        row(has_dv, "Desk View camera present",
+            "needs an M4-or-later Mac — use plain `cono-check` with an iPhone or webcam instead")
+        with tempfile.TemporaryDirectory() as td:
+            p = subprocess.Popen([str(bin_), "--device", "deskview" if has_dv else "default",
+                                  "--interval", "1", "--count", "1", "--out", td],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                _, err = p.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                err = b""
+            errs = err.decode(errors="replace")
+            denied = "permission denied" in errs
+            got = any(Path(td).glob("frame-*.jpg"))
+            row(got, "camera capture works from this terminal",
+                "allow camera for your terminal app: System Settings → Privacy & Security → Camera"
+                if denied else "close other camera apps (FaceTime, old cono-check tabs) and re-run")
+    print("\nAll good — run `cono-check` and get to work." if ok
+          else "\nFix the ✗ items above, then re-run `cono-check doctor`.")
+    sys.exit(0 if ok else 1)
+
+
 def main():
     args = sys.argv[1:]
+    if "doctor" in args:
+        doctor()
     model, port, replay_dir = "sonnet", 8763, None
     open_browser = "--no-open" not in args
     args = [a for a in args if a != "--no-open"]

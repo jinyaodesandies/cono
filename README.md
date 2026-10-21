@@ -54,6 +54,11 @@ Either way: when you pause writing, Cono snaps one frame and checks it.
 There's a "Check now" button when you don't want to wait, and in browser
 mode a "Pause camera" button that turns the camera fully off.
 
+Before taking it somewhere that matters (class, a tutoring session),
+run `cono-check doctor` — a ten-second preflight that verifies the
+`claude` CLI, the capture tool, Desk View, and camera permission, with
+a fix suggestion for anything that fails.
+
 Other flags:
 
 ```bash
