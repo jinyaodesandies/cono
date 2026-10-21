@@ -29,16 +29,27 @@ installed and logged in (`claude` does the reading — no API key setup).
 ## Use it on your own work
 
 ```bash
-cono-check/cono-check
+cono-check/cono-check deskview   # the Mac's Desk View camera — top-down on your page
+cono-check/cono-check            # or: any camera the browser can see
 ```
 
-The page asks for camera access (a normal browser permission prompt) and
-shows live video. Any camera the browser can see works: the built-in
-one, a webcam, or an iPhone near your Mac via Continuity Camera — pick
-one from the camera menu under the video, and hold the page up or lay it
-flat in view. When you pause writing, Cono snaps one frame and checks
-it. There's a "Check now" button when you don't want to wait, and a
-"Pause camera" button that turns the camera fully off.
+**Desk View** is the real thing: the Mac's top-down desk camera (built in
+on M4-and-later Macs), so the page lies flat where you naturally write.
+Browsers can't open that camera, so this mode captures through `deskcap`,
+a small Swift tool that builds itself from the bundled source on first
+run (needs the Xcode command line tools: `xcode-select --install`), and
+your terminal app needs camera permission — macOS asks once. The page
+shows the camera's view at about a frame per second.
+
+**Browser mode** works on any Mac with any camera the browser can see:
+the built-in one (hold the page up facing the screen), a webcam, or an
+iPhone near your Mac via Continuity Camera — pick one from the camera
+menu under the video. If the picture keeps cropping to your face, turn
+off Center Stage in Control Center → Video Effects.
+
+Either way: when you pause writing, Cono snaps one frame and checks it.
+There's a "Check now" button when you don't want to wait, and in browser
+mode a "Pause camera" button that turns the camera fully off.
 
 Other flags:
 
@@ -52,7 +63,7 @@ cono-check --no-open             # don't open the browser automatically
 ## Record a 10-minute session
 
 ```bash
-cono-check session
+cono-check session               # uses Desk View; `cono-check session live` for a browser camera
 ```
 
 For developing the checking itself: a consented, contained recording of

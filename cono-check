@@ -13,7 +13,8 @@ Claude Code login, no API key) reads it and reports:
 
 Usage:
   cono-check                     # live camera, picked in the browser
-  cono-check session             # live, with the 10-minute recorded session panel open
+  cono-check deskview            # the Mac's Desk View camera (top-down), via deskcap
+  cono-check session             # 10-minute recorded session panel open (combines: deskview session)
   cono-check demo                # no camera needed: bundled sample session
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
@@ -30,6 +31,24 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.html"
 SAMPLE = HERE / "sample"
+
+
+def ensure_deskcap():
+    """Find the deskcap capture binary (Desk View needs AVFoundation, not a
+    browser — browsers can't enumerate the deskViewCamera device), building
+    it from the bundled source if needed."""
+    for p in (HERE / "deskcap", HERE.parent / "deskcap" / "deskcap"):
+        if p.exists():
+            return p
+    if shutil.which("swiftc"):
+        print("building deskcap (first run, ~20 s)…")
+        r = subprocess.run(["swiftc", "-O", "-framework", "AppKit", "-framework", "AVFoundation",
+                            "-framework", "CoreImage", "-framework", "ImageIO",
+                            "-o", str(HERE / "deskcap"), str(HERE / "deskcap.swift")])
+        if r.returncode == 0:
+            return HERE / "deskcap"
+    sys.exit("deskcap is needed for Desk View and couldn't be built. Install the Xcode "
+             "command line tools (xcode-select --install) and rerun.")
 
 # replay-mode gating (live mode gates in the browser with the same numbers)
 DIRTY_AT = 0.20       # changed_frac above this = real activity (writing, hand)
@@ -68,6 +87,7 @@ class State:
         self.check_asap = False         # replay mode: Check now button
         self.snap_n = 0
         self.session_panel = False      # `cono-check session`: open the consent panel
+        self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
 
     def snapshot(self):
         with self.lock:
@@ -75,7 +95,7 @@ class State:
                 "status": self.status, "mode": self.mode, "model": self.model,
                 "frame": self.frame, "frame_n": self.frame_n,
                 "checks": self.checks[:30], "session_panel": self.session_panel,
-                "session_active": SESSION.active,
+                "session_active": SESSION.active, "cap_error": self.cap_error,
             }
 
 
@@ -156,7 +176,8 @@ class Session:
         (self.dir / "session.json").write_text(json.dumps(m, indent=1))
         size = sum(p.stat().st_size for p in self.dir.rglob("*") if p.is_file())
         print(f"session saved: {self.dir}  ({size / 1e6:.0f} MB)")
-        return {"path": str(self.dir), "mb": round(size / 1e6)}
+        return {"path": str(self.dir), "mb": round(size / 1e6),
+                "checks": [{"snap": c["snap"], "check": c["check"]} for c in self.checks]}
 
 
 SESSION = Session()
@@ -258,8 +279,10 @@ def checker(frames_dir):
             STATE.status = "watching"
 
 
-def watcher(log_path):
-    """Replay mode only: tail the session log and gate like the browser does."""
+def watcher(log_path, frames_dir):
+    """Replay and deskview modes: tail the capture log and gate like the
+    browser does. In deskview mode this thread also records the session
+    bundle (dense frames + gating signal) since no client camera exists."""
     seen = 0
     dirty = False
     dirty_frames = 0
@@ -279,6 +302,18 @@ def watcher(log_path):
                 STATE.frame_n += 1
                 asap = STATE.check_asap
                 STATE.check_asap = False
+            if SESSION.active and STATE.mode == "deskview":
+                with SESSION.lock:
+                    SESSION.frame_n += 1
+                    dense = f"frame-{SESSION.frame_n:04d}.jpg"
+                try:
+                    shutil.copy(frames_dir / row["file"], SESSION.dir / "frames" / dense)
+                except OSError:
+                    pass
+                if changed is not None:
+                    with SESSION.lock:
+                        with open(SESSION.dir / "signal.csv", "a") as f:
+                            f.write(f"{SESSION.t()},{changed:.4f}\n")
             if changed is not None and changed > DIRTY_AT:
                 dirty = True
             if dirty:
@@ -392,6 +427,11 @@ class Handler(BaseHTTPRequestHandler):
                 (SESSION.dir / "page-final.jpg").write_bytes(body)
             self.send(200, b"{}", "application/json")
         elif url.path == "/session/end":
+            if SESSION.active and STATE.mode == "deskview" and STATE.frame:
+                try:        # no client camera: the latest captured frame is the final page
+                    shutil.copy(self.frames_dir / STATE.frame, SESSION.dir / "page-final.jpg")
+                except OSError:
+                    pass
             result = SESSION.end(json.loads(self.body() or b"{}").get("ended_early", False))
             self.send(200, json.dumps(result or {}).encode(), "application/json")
         elif url.path == "/session/annotate":       # after end: merge annotations
@@ -445,11 +485,15 @@ def main():
                 v if flag == "--replay" else replay_dir,
             )
             del args[i:i + 2]
-    if args and args[0] == "demo":
+    deskview = "deskview" in args or "deskcap" in args
+    if "demo" in args:
         replay_dir = str(SAMPLE)
-    if args and args[0] == "session":
+    if "session" in args:
         with STATE.lock:
             STATE.session_panel = True
+        deskview = deskview or not replay_dir   # a recorded session means Desk View
+    if "live" in args:
+        deskview = False
 
     if not shutil.which("claude"):
         sys.exit("The `claude` CLI is required (it does the reading): https://claude.com/claude-code\n"
@@ -460,17 +504,35 @@ def main():
 
     with STATE.lock:
         STATE.model = model
-        STATE.mode = "replay" if replay_dir else "live"
+        STATE.mode = "replay" if replay_dir else "deskview" if deskview else "live"
 
+    cap = None
     if replay_dir:
         threading.Thread(target=replay, args=(Path(replay_dir).expanduser(), out), daemon=True).start()
-        threading.Thread(target=watcher, args=(out / "log.csv",), daemon=True).start()
+        threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
+    elif deskview:
+        cap = subprocess.Popen(
+            [str(ensure_deskcap()), "--device", "deskview", "--interval", "1", "--out", str(out)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
+
+        def cap_watch():
+            err = (cap.stderr.read() or "").strip()
+            cap.wait()
+            with STATE.lock:
+                STATE.cap_error = err.splitlines()[-1] if err else \
+                    "The Desk View camera stopped — it may be in use by another app."
+            print(f"deskcap exited: {STATE.cap_error}")
+        threading.Thread(target=cap_watch, daemon=True).start()
     threading.Thread(target=checker, args=(out,), daemon=True).start()
 
     Handler.frames_dir = out
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
     def stop(*_):
+        if cap:
+            cap.terminate()
         print(f"\nstopped. snaps kept in {out}")
         sys.exit(0)
     signal.signal(signal.SIGINT, stop)

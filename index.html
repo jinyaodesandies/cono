@@ -543,8 +543,9 @@
   }
 
   el("checknow").addEventListener("click", () => {
-    if (mode === "live") { snap("asked"); sessionEvent("check_now"); }
+    if (mode === "live") snap("asked");
     else { manualPending = true; fetch("/check", { method: "POST" }); }
+    sessionEvent("check_now");
   });
 
   // ---------- 10-minute recorded session ----------
@@ -584,13 +585,15 @@
   async function startSession() {
     const track = stream?.getVideoTracks()[0];
     await fetch("/session/start", { method: "POST", body: JSON.stringify({
-      camera_label: track?.label || "",
-      video_res: [el("video").videoWidth, el("video").videoHeight],
+      camera_label: track?.label || (mode === "deskview" ? "Desk View (deskcap)" : ""),
+      video_res: mode === "deskview" ? [1920, 1440]
+                 : [el("video").videoWidth, el("video").videoHeight],
     }) });
     el("sessionpanel").hidden = true;
     el("sessionbtn").hidden = true;
     el("endbtn").hidden = false;
-    session = { start: performance.now(), left: SESSION_S, signal: [], snaps: [], paused: false, framingShown: false, timers: [] };
+    session = { start: performance.now(), left: SESSION_S, signal: [], snaps: [], paused: false,
+                framingShown: false, checksAtStart: checkCount < 0 ? 0 : checkCount, timers: [] };
     session.timers.push(setInterval(async () => {          // dense frames
       if (session.paused) return;
       const b = await grabJpeg();
@@ -620,16 +623,16 @@
     el("rec").hidden = true;
     el("endbtn").hidden = true;
     el("framingline").hidden = true;
-    const final = await grabJpeg();
-    if (final) await fetch("/session/final", { method: "POST", body: final });
+    if (mode === "live") {
+      const final = await grabJpeg();
+      if (final) await fetch("/session/final", { method: "POST", body: final });
+    }
     const info = await (await fetch("/session/end", { method: "POST", body: JSON.stringify({ ended_early: early }) })).json();
-    annotate(s.snaps, info);
+    annotate(info);
   }
 
-  function annotate(snaps, info) {
-    const entries = snaps
-      .map(id => lastChecks.find(c => c.snap === id))
-      .filter(Boolean)
+  function annotate(info) {
+    const entries = (info.checks || [])
       .map(c => ({ snap: c.snap, check: c.check, verdict: "", note: "" }));
     const p = el("sessionpanel");
     p.hidden = false;
@@ -705,22 +708,34 @@
         el("pausebtn").hidden = false;
         el("sessionbtn").hidden = false;
         startCamera().then(() => { if (s.session_panel) showConsent(); });
+      } else if (mode === "deskview") {
+        el("sessionbtn").hidden = false;
+        el("caption").textContent = "Live from the Desk View camera — a new frame every second or two. Only the snapshots on the right are read by Claude.";
+        el("checknow").disabled = false;
+        if (s.session_panel) showConsent();
       } else {
         el("demomark").hidden = false;
         el("caption").textContent = "Replaying a recorded session — no camera in use.";
         el("checknow").disabled = false;
       }
     }
-    if (mode === "replay") {
+    if (mode !== "live") {
       if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
       if (s.status === "watching") manualPending = false;
+    }
+    if (mode === "deskview" && s.cap_error && !poll.capErrShown) {
+      poll.capErrShown = true;
+      showOffline(["The Desk View camera couldn't run.",
+        s.cap_error + " If this is a permission problem, allow camera access for your " +
+        "terminal app in System Settings → Privacy & Security → Camera, then restart cono-check."], false);
+      el("caption").textContent = "";
     }
     if (s.checks.length !== checkCount || pending.length) {
       checkCount = s.checks.length;
       renderFeed(s.checks);
     }
-    if (session && !session.framingShown && session.snaps.length) {
-      const first = s.checks.find(c => c.snap === session.snaps[0]);
+    if (session && !session.framingShown && s.checks.length > session.checksAtStart) {
+      const first = s.checks[0];            // first check since recording started
       if (first && first.visibility != null) {
         session.framingShown = true;
         el("framingline").hidden = first.visibility >= 5;
