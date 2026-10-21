@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""cono-check — Cono's checking component as a local web app.
+"""cono-check — Cono's checking component as a local web app: a live
+digital twin of the page on your desk.
 
-The browser shows live video of your page (getUserMedia — any camera it
-can see, including iPhone Continuity). Nothing streams anywhere: the page
-diffs the video locally, and only when you pause writing does it snap one
-full-resolution frame and send it here, where Claude (`claude` CLI — your
-Claude Code login, no API key) reads it and reports:
+The camera watches your page; the page diffs the video locally, and only
+when you pause writing does one frame go to Claude (`claude` CLI — your
+Claude Code login, no API key), which streams back, fast fields first:
 
   visibility n/10   what the camera can actually see
-  on your page      faithful transcription, student's errors preserved
+  problem card      the question you're on, your progress, a Next button
   check             hint-first: where the mistake is, never the answer
+  readability map   green/red page-shaped grid: what could/couldn't be read
+  equations         the relations the problem runs on, ? for unknowns
+  on your page      faithful transcription, student's errors preserved
+
+The twin is the product: problem card + dialogue (typed chat, point with
+your pen by clicking the image), equations, readability map. Replies
+stream — first text in ~1-3 s.
 
 Usage:
   cono-check                     # the Desk View camera (top-down on your desk) - the default
@@ -19,15 +25,20 @@ Usage:
   cono-check doctor              # preflight: is everything ready to run?
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
-  cono-check --port 9000
+  cono-check --port 9000         # serve somewhere else (default: 8764)
   cono-check --no-open           # don't open the browser automatically
 Ctrl-C to stop.
 """
-import csv, json, os, re, shutil, signal, struct, subprocess, sys, threading, time
+import base64, csv, json, os, queue, re, shutil, signal, struct, subprocess, sys, threading, time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+try:
+    sys.stdout.reconfigure(line_buffering=True)   # latency lines show up when piped
+except Exception:
+    pass
 
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.html"
@@ -60,24 +71,33 @@ MAX_DIRTY_S = 20      # mid-activity "checking in" snap after this long dirty
 MIN_GAP_S = 5         # hard floor between automatic snaps sent to Claude
 STUCK_S = int(os.environ.get("CONO_STUCK_S", 120))   # quiet this long after writing = maybe stuck
 
-PROMPT = """You are Cono, an AI study tutor watching a student's paper through a camera (a top-down or handheld view of the page). Read the image file: {path}
+PROMPT = """You are Cono, an AI study tutor watching a student's page as it lies on their desk, through a top-down camera. The attached image is the latest capture of the page.
 {context}
-Respond in EXACTLY this plain-text format, no markdown:
+Respond in EXACTLY this plain-text format, no markdown, fields in this exact order:
 
-VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units) are readable; note blur or glare.
+VISIBILITY: n/10 - one short line: what the camera sees; which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units, exact digits) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
-ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve scientific notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
-CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. If nothing is readable, give one concrete tip to fix the framing. {escalation}
-KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed."""
+PROBLEM: the problem the student is currently on, exactly as: <the worksheet's own printed label> | <that question restated in at most 12 words> | <the student's progress on it in at most 8 words, or "not started">. If the page has no labeled problems, invent a short stable label from the content.
+ON PAGE: the student's handwritten work, line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Do NOT copy printed question text - give each item's printed label, then the handwriting under it; skip items with no handwriting. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
+TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, or recount sig figs - BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok"). Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error. Write "none" if no counting is involved.
+CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
+KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed.
+GRID: a readability map of the sheet of paper itself (ignore the desk around it): exactly 6 lines of 4 digits, each digit one cell of the page in reading order, top-left cell first. 2 = ink or print there and readable, 1 = something written or printed there but too blurry, small, cut off, or glared to read reliably, 0 = blank paper. If no page is in frame, give 6 lines of 0000.
+EQUATIONS: the 1-3 relations that govern the problem in PROBLEM - taken from the page if the student wrote them, otherwise the standard relation the problem needs. One per line, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Write "none" if none apply."""
 
 CONTEXT_BLOCK = """
-Context from your earlier looks (for WORKING ON and CHECK only - always transcribe from the image, not from this):
-Earlier page reading:
+Context from your earlier looks (for WORKING ON, PROBLEM and CHECK only - always transcribe from the image, not from this):
+Current problem: {problem}
+Earlier reading of the student's handwriting:
 {last_on_page}
 Your recent notes to the student (do not repeat these):
-{last_checks}
+{last_checks}{thread}
 If the page has flipped to a different sheet, treat it as fresh context and name the new page in WORKING ON.
 """
+
+THREAD_BLOCK = """
+Recent conversation with the student about this problem:
+{lines}"""
 
 # the four feedback moves (plans/feedback-policy.md is the source of truth);
 # "question" is the default; sessions rotate through all of them
@@ -93,37 +113,42 @@ NO_NEW_RULE = "If there is no new student work, CHECK must be at most one short 
 ESCALATION = """The student pressed "check now" themselves. If your recent notes already asked a guiding question about an error that is still unfixed with no new attempt, escalate instead of repeating: give ONE worked step toward fixing it (not the final answer). If you already gave a worked step for it, give the answer plainly and offer: "want to explain it back to me on paper?". Never refuse or moralize."""
 
 STUCK_NOTE = """The student has written nothing for a while and may be stuck. This check is the one exception to the no-new-work rule: even though nothing new is on the page, give ONE gentle orientation nudge about the problem they appear stopped on - restate what it asks in plain words, or name the first thing to decide, building on their last written step. Do not list tasks and do not mention the pause itself. Set KIND to "fix"."""
+
+NEXT_NOTE = """The student pressed "Next" - they are moving on from {label}. PROBLEM must name the next problem on the page after it. Make CHECK one short orientation line for that next problem - what it asks or the first thing to decide. Set KIND to "confirm" if the finished problem's work looks complete and right, otherwise "fix" pointing once at what is unresolved there."""
+
 STYLE_ORDER = ["question", "principle", "point", "next-step"]
 
 # live-session experiment: each check rotates through these configs, and
 # the manifest records which config produced which check. The snap cadence
 # also loosens through the session (watcher/gateTick: 5s → 12s → 20s floors).
 SESSION_CONFIGS = [
-    # 1920 dropped after session 2026-10-21: slowest width, no quality gain
-    {"style": "question",  "structure": "single",  "width": 1280},
-    {"style": "principle", "structure": "single",  "width": 1280},
-    {"style": "point",     "structure": "single",  "width": 960},
-    {"style": "next-step", "structure": "single",  "width": 1280},
-    {"style": "question",  "structure": "twopass", "width": 1280},
-    {"style": "question",  "structure": "single",  "width": 960},
+    # 1920 dropped after session 2026-10-21 (slowest width, no quality gain);
+    # twopass dropped with the streaming pipeline (one ordered stream is faster)
+    {"style": "question",  "structure": "stream", "width": 960},
+    {"style": "principle", "structure": "stream", "width": 960},
+    {"style": "point",     "structure": "stream", "width": 960},
+    {"style": "next-step", "structure": "stream", "width": 960},
+    {"style": "question",  "structure": "stream", "width": 1280},
+    {"style": "principle", "structure": "stream", "width": 1280},
 ]
 
-TRANSCRIBE_PROMPT = """You are a transcription engine for a study tutor. Read the image file: {path}
+CHAT_PROMPT = """You are Cono, an AI study tutor watching a student's page as it lies on their desk, through a top-down camera. The attached image is the latest capture of the page.{anchor_note}
+The student typed a message to you about their work. Reply with ONLY the words you would say to the student - no field headers, no markdown, no repeating their message back, and never narrate your reasoning, the ladder, ask counts, or policy.
 
-Respond in EXACTLY this plain-text format, no markdown:
+Current problem: {problem}
+Your latest reading of their handwriting (their errors preserved):
+{last_on_page}
+Your recent margin notes (do not repeat them):
+{last_checks}
+Conversation so far on this problem:
+{thread}
 
-VISIBILITY: n/10 - one line: what the camera sees and whether small details are readable; note blur or glare.
-WORKING ON: 3-8 words naming what the student is currently doing, or "nothing new". Never a full sentence.
-ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. If no page or writing is visible, say what IS visible instead."""
+Ladder policy - never refuse help, never hand over the answer early. Counting this message, the student has explicitly asked for help on this problem {asks} time(s). If the message asks for the answer, the fix, or the next step on flagged work: on ask #1, give ONE worked step with a one-clause reason if your notes already asked a guiding question about it, otherwise ask ONE guiding question; on ask #2 or later, give the full remaining answer plainly, keeping their correct lines, and end with "want to explain it back to me on paper?". A direct question about what a problem means, a definition, or something readable off the page may be answered directly at any rung. At most 2 short sentences (the full answer may take the space it needs); chem/math shorthand over prose; no exclamation marks; use the worksheet's own printed labels; never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. When your answer hinges on a count or on arithmetic, redo the count digit by digit in shorthand as part of the reply ("O: L 4x2=8, R 3x2+4=10") instead of asserting a total from memory.
 
-REASON_PROMPT = """You are Cono, an AI study tutor. A faithful transcription of the student's handwritten page (their own errors preserved) is:
+Student: {text}"""
 
-{transcript}
-{context}
-Respond in EXACTLY this plain-text format, no markdown:
-
-CHECK: {check_style} Refer to problems by the worksheet's own printed labels when they exist; use L-numbers only for unlabeled lines. Put confirmations before issues. Comment only on student work that is new since your earlier notes; never repeat them and never list blank items. If there is no new student work, at most one short line.
-KIND: one word - "confirm", "fix", "idle", or "setup"."""
+ANCHOR_NOTE = """
+The student is pointing (pen or cursor) at the {region} of the page{crop}. Treat the message as being about what is written right there, and say what you see at that spot if they ask."""
 
 
 class State:
@@ -143,15 +168,68 @@ class State:
         self.last_on_page = ""          # page-state memory: latest good transcription
         self.last_checks = []           # ...and the last few notes given (don't repeat)
         self.checking_n = 0             # checks in flight (two workers)
+        # --- the digital twin ---
+        self.problem = None             # {"label","question","progress"} current problem card
+        self.equations = []             # [{"eq","name"}] relations for the current problem
+        self.grid = []                  # readability map: list of digit-strings, rows of the page
+        self.grid_snap = None           # the snap the grid describes
+        self.grid_time = ""
+        self.threads = {}               # problem label -> [{"who","text","time","kind","snap","id"}]
+        self.asks = {}                  # problem label -> explicit asks so far (ladder position)
+        self.next_from = None           # label the student pressed Next on (consumed by next check)
+        self.latest_img = None          # newest stored image filename (chat reads this)
+        self.msg_id = 0                 # ids for checks + chat messages (SSE correlation)
+
+    def thread(self):
+        label = (self.problem or {}).get("label")
+        return self.threads.setdefault(label, []) if label else []
 
     def snapshot(self):
         with self.lock:
+            label = (self.problem or {}).get("label")
             return {
                 "status": self.status, "mode": self.mode, "model": self.model,
                 "frame": self.frame, "frame_n": self.frame_n,
                 "checks": self.checks[:30], "session_panel": self.session_panel,
                 "session_active": SESSION.active, "cap_error": self.cap_error,
+                "twin": {
+                    "problem": self.problem, "equations": self.equations,
+                    "grid": self.grid, "grid_snap": self.grid_snap,
+                    "grid_time": self.grid_time,
+                },
+                "thread": self.thread()[-40:],
+                "asks": self.asks.get(label, 0),
             }
+
+
+class Events:
+    """Server-sent events: streamed check/chat text and twin updates."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.clients = []               # queue.Queue per connected /events client
+
+    def register(self):
+        q = queue.Queue(maxsize=400)
+        with self.lock:
+            self.clients.append(q)
+        return q
+
+    def unregister(self, q):
+        with self.lock:
+            if q in self.clients:
+                self.clients.remove(q)
+
+    def emit(self, **ev):
+        data = json.dumps(ev)
+        with self.lock:
+            for q in self.clients:
+                try:
+                    q.put_nowait(data)
+                except queue.Full:
+                    pass
+
+
+EVENTS = Events()
 
 
 STATE = State()
@@ -299,13 +377,18 @@ def next_check():
             PENDING_EVENT.clear()
 
 
-def parse_report(text):
-    """Split Claude's reply into its fields."""
+FIELDS_RE = re.compile(r"\s*(VISIBILITY|WORKING ON|PROBLEM|TALLY|ON PAGE|CHECK|KIND|GRID|EQUATIONS)\s*:\s*(.*)", re.I)
+
+
+def parse_report(text, partial=False):
+    """Split Claude's reply into its fields. With partial=True this is safe to
+    call on a half-streamed reply (used to push CHECK text live over SSE)."""
     out = {"visibility": None, "visibility_note": "", "working_on": "",
-           "on_page": "", "check": "", "kind": ""}
+           "on_page": "", "check": "", "kind": "", "problem": None,
+           "grid": [], "equations": [], "tally": ""}
     field = None
     for line in text.splitlines():
-        m = re.match(r"\s*(VISIBILITY|WORKING ON|ON PAGE|CHECK|KIND)\s*:\s*(.*)", line, re.I)
+        m = FIELDS_RE.match(line)
         if m:
             field = m.group(1).upper()
             rest = m.group(2)
@@ -318,18 +401,45 @@ def parse_report(text):
                     out["visibility_note"] = rest.strip()
             elif field == "WORKING ON":
                 out["working_on"] = rest.strip().strip('"')
+            elif field == "PROBLEM":
+                parts = [p.strip() for p in rest.split("|")]
+                if parts and parts[0]:
+                    out["problem"] = {"label": parts[0].strip('". ').lower(),
+                                      "question": parts[1] if len(parts) > 1 else "",
+                                      "progress": parts[2] if len(parts) > 2 else ""}
+            elif field == "TALLY":
+                t = rest.strip()
+                out["tally"] = "" if t.lower() in ("none", "none.") else t
             elif field == "ON PAGE":
                 out["on_page"] = rest.strip()
             elif field == "KIND":
                 k = rest.strip().strip('".').lower()
                 out["kind"] = k if k in ("confirm", "fix", "idle", "setup") else ""
+            elif field == "GRID":
+                pass                    # rows follow on their own lines
+            elif field == "EQUATIONS":
+                if rest.strip() and rest.strip().lower() != "none":
+                    eq, _, name = rest.partition("::")
+                    if eq.strip():
+                        out["equations"].append({"eq": eq.strip(), "name": name.strip()})
             else:
                 out["check"] = rest.strip()
         elif field == "ON PAGE":
             out["on_page"] += "\n" + line
         elif field == "CHECK":
             out["check"] += "\n" + line
+        elif field == "GRID":
+            row = line.strip()
+            if re.fullmatch(r"[012]{2,8}", row) and len(out["grid"]) < 8:
+                out["grid"].append(row)
+        elif field == "EQUATIONS":
+            if line.strip() and line.strip().lower() != "none" and len(out["equations"]) < 4:
+                eq, _, name = line.partition("::")
+                if eq.strip():
+                    out["equations"].append({"eq": eq.strip(), "name": name.strip()})
     out["on_page"], out["check"] = out["on_page"].strip(), out["check"].strip()
+    if partial:
+        return out
     if not any([out["visibility_note"], out["on_page"], out["check"]]):
         out["check"] = text.strip()     # model ignored the format: show it anyway
     if not out["kind"]:                 # degrade gracefully when KIND is missing
@@ -354,12 +464,124 @@ def shrink_for_model(path, width=1280):
     return small if r.returncode == 0 and small.exists() else path
 
 
-def claude_call(prompt, model, read=True):
-    cmd = ["claude", "-p", "--model", model]
-    if read:
-        cmd.append("--allowedTools=Read")
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=120)
-    return r.stdout.strip() or r.stderr.strip() or "(no response)"
+def img_block(path):
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                        "data": base64.b64encode(Path(path).read_bytes()).decode()}}
+
+
+def crop_for_anchor(path, x, y, frac=0.38):
+    """Full-res close-up around a pen-point (x, y as 0-1 fractions), via sips.
+    Returns the crop path or None — callers treat the crop as best-effort."""
+    try:
+        r = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
+                           capture_output=True, text=True, timeout=10)
+        dims = dict(re.findall(r"(pixelWidth|pixelHeight):\s*(\d+)", r.stdout))
+        w, h = int(dims["pixelWidth"]), int(dims["pixelHeight"])
+        cw, ch = int(w * frac), int(h * frac)
+        ox = min(max(int(x * w) - cw // 2, 0), w - cw)
+        oy = min(max(int(y * h) - ch // 2, 0), h - ch)
+        out = Path(path).with_name(f"{Path(path).stem}-crop.jpg")
+        r = subprocess.run(["sips", "--cropOffset", str(oy), str(ox),
+                            "--cropToHeightWidth", str(ch), str(cw), str(path), "--out", str(out)],
+                           capture_output=True, timeout=10)
+        return out if r.returncode == 0 and out.exists() else None
+    except Exception:
+        return None
+
+
+def anchor_region(x, y):
+    col = ["left", "middle", "right"][min(int(x * 3), 2)]
+    row = ["top", "center", "bottom"][min(int(y * 3), 2)]
+    return f"{row} {col}" if (row, col) != ("center", "middle") else "center"
+
+
+def claude_stream(blocks, model, on_text=None, timeout=120):
+    """One streaming `claude` call: content blocks in (text + base64 images),
+    text streamed out. on_text(full_text_so_far) fires per delta. Returns
+    (text, first_token_s). Thinking is disabled — it cost ~55 s per check."""
+    msg = {"type": "user", "message": {"role": "user", "content": blocks}}
+    env = {**os.environ, "MAX_THINKING_TOKENS": "0"}
+    cmd = ["claude", "-p", "--model", model, "--input-format", "stream-json",
+           "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, env=env)
+    killer = threading.Timer(timeout, p.kill)
+    killer.start()
+    t0 = time.time()
+    text, first, err = "", None, ""
+    try:
+        p.stdin.write(json.dumps(msg) + "\n")
+        p.stdin.close()
+        for line in p.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "stream_event":
+                d = ev["event"].get("delta") or {}
+                if d.get("type") == "text_delta":
+                    if first is None:
+                        first = time.time() - t0
+                    text += d["text"]
+                    if on_text:
+                        on_text(text)
+            elif ev.get("type") == "result" and ev.get("is_error"):
+                err = str(ev.get("result", ""))[:300]
+    finally:
+        killer.cancel()
+        try:
+            err = err or p.stderr.read()[:300].strip()
+        except Exception:
+            pass
+        p.wait()
+    if not text.strip():
+        raise RuntimeError(err or "no response from claude")
+    return text, first
+
+
+def fmt_problem(p):
+    if not p:
+        return "(not identified yet)"
+    return f"{p.get('label', '?')} - {p.get('question', '')} (progress: {p.get('progress', '')})"
+
+
+def fmt_thread(msgs, n=8):
+    return "\n".join(f"{'Student' if m['who'] == 'you' else 'You'}: {m['text']}"
+                     for m in msgs[-n:])
+
+
+def build_context():
+    """Everything the model remembers, under STATE.lock."""
+    thread = STATE.thread()
+    tblock = THREAD_BLOCK.format(lines=fmt_thread(thread)) if thread else ""
+    if not (STATE.last_on_page or STATE.last_checks or STATE.problem):
+        return ""
+    return CONTEXT_BLOCK.format(
+        problem=fmt_problem(STATE.problem),
+        last_on_page=STATE.last_on_page[:1200] or "(none yet)",
+        last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
+        thread=tblock,
+    )
+
+
+def absorb_twin(entry, snap):
+    """Fold a finished check's structured fields into the twin. Under lock."""
+    if entry.get("grid"):
+        STATE.grid = entry["grid"]
+        STATE.grid_snap = snap
+        STATE.grid_time = entry["time"]
+    if entry.get("kind") == "setup":
+        return                          # unreadable frame: keep card + equations
+    p = entry.get("problem")
+    if p and p.get("label"):
+        STATE.problem = p
+    if entry.get("equations"):
+        STATE.equations = entry["equations"]
+    if entry.get("on_page"):
+        STATE.last_on_page = entry["on_page"]
 
 
 def checker(frames_dir):
@@ -368,52 +590,70 @@ def checker(frames_dir):
         with STATE.lock:
             STATE.checking_n += 1
             STATE.status = "checking"
+            STATE.msg_id += 1
+            cid = STATE.msg_id
+            context = build_context()
+            next_from = STATE.next_from if reason == "next" else None
+            if reason == "next":
+                STATE.next_from = None
+            if reason == "asked" and STATE.problem:
+                label = STATE.problem["label"]
+                STATE.asks[label] = STATE.asks.get(label, 0) + 1
         in_session = SESSION.active
         cfg = SESSION.next_config() if in_session else \
-            {"style": "question", "structure": "single", "width": 960}
+            {"style": "question", "structure": "stream", "width": 960}
         if reason == "stuck?":
-            cfg = {**cfg, "style": "next-step", "structure": "single"}
+            cfg = {**cfg, "style": "next-step"}
         t = SESSION.t() if in_session else None
-        entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap, "reason": reason}
+        entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap,
+                 "reason": reason, "id": cid}
+        EVENTS.emit(type="check_start", id=cid, snap=snap, reason=reason)
         t0 = time.time()
-        raw = ""
-        with STATE.lock:
-            context = CONTEXT_BLOCK.format(
-                last_on_page=STATE.last_on_page[:1200],
-                last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
-            ) if STATE.last_on_page or STATE.last_checks else ""
+        raw, first = "", None
+        extra = ESCALATION if reason == "asked" else \
+                STUCK_NOTE if reason == "stuck?" else \
+                NEXT_NOTE.format(label=next_from or "the current problem") if reason == "next" else ""
+        last_push = [0.0]
+
+        def push(text):                 # stream partial CHECK text to the browser
+            now = time.time()
+            done = "\nKIND" in text
+            if not done and now - last_push[0] < 0.12:
+                return
+            last_push[0] = now
+            p = parse_report(text, partial=True)
+            if p["check"] or p["problem"]:
+                EVENTS.emit(type="check_partial", id=cid, check=p["check"],
+                            problem=p["problem"], visibility=p["visibility"],
+                            working_on=p["working_on"])
         try:
             send = shrink_for_model(frames_dir / snap, cfg["width"])
-            if cfg["structure"] == "twopass":
-                raw1 = claude_call(TRANSCRIBE_PROMPT.format(path=send), STATE.model)
-                entry.update(parse_report(raw1))
-                raw2 = claude_call(REASON_PROMPT.format(
-                    transcript=entry.get("on_page") or "(nothing transcribed)",
-                    context=context,
-                    check_style=CHECK_STYLES[cfg["style"]]), STATE.model, read=False)
-                p2 = parse_report(raw2)
-                entry["check"] = p2["check"] or raw2
-                entry["kind"] = p2["kind"]
-                raw = raw1 + "\n--- pass 2 ---\n" + raw2
-            else:
-                extra = ESCALATION if reason == "asked" else \
-                        STUCK_NOTE if reason == "stuck?" else ""
-                raw = claude_call(PROMPT.format(path=send, context=context,
-                                                check_style=CHECK_STYLES[cfg["style"]],
-                                                no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
-                                                escalation=extra),
-                                  STATE.model)
-                entry.update(parse_report(raw))
+            prompt = PROMPT.format(context=context,
+                                   check_style=CHECK_STYLES[cfg["style"]],
+                                   no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
+                                   escalation=extra)
+            raw, first = claude_stream([{"type": "text", "text": prompt}, img_block(send)],
+                                       STATE.model, on_text=push)
+            entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
-                if entry.get("on_page") and entry.get("kind") != "setup":
-                    STATE.last_on_page = entry["on_page"]
+                absorb_twin(entry, snap)
                 if entry.get("check") and entry.get("kind") in ("confirm", "fix"):
                     STATE.last_checks = (STATE.last_checks + [entry["check"]])[-3:]
-        except Exception:
+                    label = (entry.get("problem") or STATE.problem or {}).get("label")
+                    if label:
+                        entry["problem_label"] = label
+                        STATE.threads.setdefault(label, []).append(
+                            {"who": "cono", "text": entry["check"], "time": entry["time"],
+                             "kind": entry["kind"], "snap": snap, "id": cid})
+        except Exception as e:
             entry.update(visibility=None, visibility_note="", on_page="", failed=True,
                          check="Couldn't read this snapshot. Check that `claude` runs "
                                "in your terminal, then retry.")
+            print(f"check failed: {e}")
         latency = int((time.time() - t0) * 1000)
+        first_ms = int(first * 1000) if first else None
+        print(f"check {snap} ({reason}): first text "
+              f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")
         if in_session and SESSION.active:
             try:
                 shutil.copy(frames_dir / snap, SESSION.dir / "snaps" / snap)
@@ -421,18 +661,79 @@ def checker(frames_dir):
                 pass
             record = {"t": t, "snap": snap, "reason": reason, "config": cfg,
                       "style": cfg["style"], "latency_ms": latency,
+                      "first_token_ms": first_ms,
+                      "problem": (entry.get("problem") or {}).get("label", ""),
                       "visibility": entry.get("visibility"),
                       "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
                       "raw": raw, "annotation": None}
             with SESSION.lock:
                 SESSION.checks.append(record)
             SESSION.event("check_done", snap=snap, reason=reason, config=cfg,
-                          latency_ms=latency, visibility=entry.get("visibility"))
+                          latency_ms=latency, first_token_ms=first_ms,
+                          visibility=entry.get("visibility"))
         with STATE.lock:
             STATE.checks.insert(0, entry)
             STATE.checking_n -= 1
             if STATE.checking_n <= 0:
                 STATE.status = "watching"
+        EVENTS.emit(type="check_done", id=cid, snap=snap)
+
+
+def run_chat(cid, text, anchor, frames_dir):
+    """One typed (or pen-pointed) student message → one streamed reply."""
+    now = datetime.now().strftime("%H:%M")
+    with STATE.lock:
+        label = (STATE.problem or {}).get("label") or "page"
+        STATE.asks[label] = STATE.asks.get(label, 0) + 1
+        asks = STATE.asks[label]
+        shown = text + (f"  ⌖ {anchor_region(*anchor)}" if anchor else "")
+        STATE.threads.setdefault(label, []).append(
+            {"who": "you", "text": shown, "time": now, "kind": "chat", "snap": None, "id": cid})
+        problem = fmt_problem(STATE.problem)
+        on_page = STATE.last_on_page[:1200] or "(none yet)"
+        notes = "\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)"
+        thread = fmt_thread(STATE.threads[label][:-1]) or "(none yet)"
+        img = STATE.latest_img or STATE.frame
+    t0 = time.time()
+    EVENTS.emit(type="chat_start", id=cid)
+
+    def push(t):
+        EVENTS.emit(type="chat_partial", id=cid, text=t)
+    anchor_note, blocks = "", []
+    try:
+        if img and (frames_dir / img).exists():
+            if anchor:
+                crop = crop_for_anchor(frames_dir / img, *anchor)
+                anchor_note = ANCHOR_NOTE.format(
+                    region=anchor_region(*anchor),
+                    crop=" (a full-resolution close-up of that spot is the second image)"
+                         if crop else "")
+                blocks = [img_block(shrink_for_model(frames_dir / img, 960))] + \
+                         ([img_block(crop)] if crop else [])
+            else:
+                blocks = [img_block(shrink_for_model(frames_dir / img, 960))]
+        prompt = CHAT_PROMPT.format(anchor_note=anchor_note, problem=problem,
+                                    last_on_page=on_page, last_checks=notes,
+                                    thread=thread, asks=asks, text=text)
+        raw, first = claude_stream([{"type": "text", "text": prompt}] + blocks,
+                                   STATE.model, on_text=push)
+        reply = raw.strip()
+    except Exception as e:
+        reply = "Couldn't answer that one — check that `claude` runs in your terminal, then ask again."
+        first = None
+        print(f"chat failed: {e}")
+    latency = int((time.time() - t0) * 1000)
+    first_ms = int(first * 1000) if first else None
+    with STATE.lock:
+        STATE.threads.setdefault(label, []).append(
+            {"who": "cono", "text": reply, "time": datetime.now().strftime("%H:%M"),
+             "kind": "chat", "snap": img, "id": cid})
+        STATE.last_checks = (STATE.last_checks + [reply])[-3:]
+    SESSION.event("chat_done", text=text, anchor=anchor, reply=reply,
+                  asks=asks, latency_ms=latency, first_token_ms=first_ms)
+    EVENTS.emit(type="chat_done", id=cid)
+    print(f"chat ({label}, ask #{asks}): first text "
+          f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")
 
 
 def watcher(log_path, frames_dir):
@@ -545,6 +846,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, p.read_bytes(), "image/jpeg")
             else:
                 self.send(404, b"no snap", "text/plain")
+        elif path == "/events":                      # SSE: streamed check/chat text
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            q = EVENTS.register()
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=15)
+                        self.wfile.write(b"data: " + data.encode() + b"\n\n")
+                    except queue.Empty:
+                        self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+            finally:
+                EVENTS.unregister(q)
         elif path == "/stream":                      # MJPEG live view (deskview mode)
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=conoframe")
@@ -591,11 +910,43 @@ class Handler(BaseHTTPRequestHandler):
             with STATE.lock:
                 STATE.snap_n += 1
                 name = f"snap-{STATE.snap_n:04d}.jpg"
+                STATE.latest_img = name
             (self.frames_dir / name).write_bytes(body)
             if SESSION.active:
                 SESSION.event("snap_sent", id=name, reason=q.get("reason", [""])[0])
-            queue_check(name, q.get("reason", ["page settled"])[0])
+            if q.get("store", ["0"])[0] != "1":      # store=1: freshen only (for chat)
+                queue_check(name, q.get("reason", ["page settled"])[0])
             self.send(200, json.dumps({"id": name}).encode(), "application/json")
+        elif url.path == "/chat":                    # typed or pen-pointed question
+            data = json.loads(self.body() or b"{}")
+            text = (data.get("text") or "").strip()[:2000]
+            anchor = data.get("anchor")
+            if anchor is not None:
+                try:
+                    anchor = (min(max(float(anchor["x"]), 0.0), 1.0),
+                              min(max(float(anchor["y"]), 0.0), 1.0))
+                except (KeyError, TypeError, ValueError):
+                    anchor = None
+            if not text:
+                text = "What about this spot?" if anchor else ""
+            if not text:
+                return self.send(400, b"empty message", "text/plain")
+            with STATE.lock:
+                STATE.msg_id += 1
+                cid = STATE.msg_id
+            SESSION.event("chat_sent", text=text, anchor=anchor)
+            threading.Thread(target=run_chat, args=(cid, text, anchor, self.frames_dir),
+                             daemon=True).start()
+            self.send(200, json.dumps({"id": cid}).encode(), "application/json")
+        elif url.path == "/next":                    # problem card: Next button
+            with STATE.lock:
+                label = (STATE.problem or {}).get("label") or "the current problem"
+                STATE.next_from = label
+                mode, frame = STATE.mode, STATE.frame
+            SESSION.event("next_pressed", from_problem=label)
+            if mode != "live" and frame:             # live mode: the browser snaps
+                queue_check(frame, "next")
+            self.send(200, json.dumps({"from": label}).encode(), "application/json")
         elif url.path == "/session/start":
             meta = json.loads(self.body() or b"{}")
             meta["accepted_at"] = datetime.utcnow().isoformat() + "Z"
@@ -695,6 +1046,10 @@ def doctor():
     print("Cono check — preflight\n")
     row(shutil.which("claude"), "claude CLI installed",
         "install Claude Code (https://claude.com/claude-code), run `claude` once to log in")
+    if shutil.which("claude"):
+        h = subprocess.run(["claude", "--help"], capture_output=True, text=True, timeout=30)
+        row("--include-partial-messages" in h.stdout, "claude CLI supports streaming output",
+            "update Claude Code: `claude update` (streamed checks need --include-partial-messages)")
     row(shutil.which("sips"), "sips available (image downscaling)", "macOS built-in — are you on macOS?")
     bin_ = None
     try:
@@ -731,7 +1086,7 @@ def main():
     args = sys.argv[1:]
     if "doctor" in args:
         doctor()
-    model, port, replay_dir = "sonnet", 8763, None
+    model, port, replay_dir = "sonnet", 8764, None
     open_browser = "--no-open" not in args
     args = [a for a in args if a != "--no-open"]
     for flag, cast in (("--model", str), ("--port", int), ("--replay", str)):
