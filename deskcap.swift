@@ -30,6 +30,7 @@ struct Options {
     var quality: CGFloat = 0.9
     var noDiff = false
     var preview = false
+    var streamFPS: Double = 0        // >0: emit length-prefixed JPEGs on stdout for live view
 
     static func stamp() -> String {
         let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"; return f.string(from: Date())
@@ -57,6 +58,9 @@ func parseArgs() -> Options {
         case "--quality", "-q": o.quality = CGFloat(Double(next(a)) ?? 0.9)
         case "--no-diff": o.noDiff = true
         case "--preview", "-p": o.preview = true
+        case "--stream", "-s":
+            guard let v = Double(next(a)), v > 0 else { fail("bad stream fps") }
+            o.streamFPS = v
         case "--help", "-h":
             print("""
             deskcap [--list] [--device deskview|default|<name>] [--interval SEC] [--out DIR]
@@ -74,9 +78,9 @@ func fail(_ msg: String) -> Never {
 }
 
 func log(_ s: String) {
+    // stderr, so stdout stays clean for --stream frame data
     let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"
-    print("[\(f.string(from: Date()))] \(s)")
-    fflush(stdout)
+    FileHandle.standardError.write(("[\(f.string(from: Date()))] \(s)\n").data(using: .utf8)!)
 }
 
 // MARK: - Device discovery
@@ -218,7 +222,7 @@ var shot = 0
 let csvURL = URL(fileURLWithPath: opts.out).appendingPathComponent("log.csv")
 try? "n,timestamp,file,width,height,bytes,changed_frac,mean_abs_diff,frames_seen\n".write(to: csvURL, atomically: true, encoding: .utf8)
 
-signal(SIGINT) { _ in print("\nstopped"); exit(0) }
+signal(SIGINT) { _ in FileHandle.standardError.write("\nstopped\n".data(using: .utf8)!); exit(0) }
 
 // Give the camera a moment to expose before the first shot.
 let timer = Timer(fire: Date().addingTimeInterval(1.5), interval: opts.interval, repeats: true) { t in
@@ -244,6 +248,27 @@ let timer = Timer(fire: Date().addingTimeInterval(1.5), interval: opts.interval,
     if shot >= opts.count { log("done (\(shot) frames)"); t.invalidate(); exit(0) }
 }
 RunLoop.main.add(timer, forMode: .common)
+
+if opts.streamFPS > 0 {
+    // live view: latest frame as JPEG on stdout, 4-byte big-endian length prefix per frame
+    let streamCtx = CIContext()
+    let sq = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
+    let streamTimer = Timer(fire: Date().addingTimeInterval(1.5), interval: 1.0 / opts.streamFPS, repeats: true) { _ in
+        guard let pb = sink.take() else { return }
+        var img = CIImage(cvPixelBuffer: pb)
+        let maxW: CGFloat = 1280                      // display-only: smaller + softer than saved frames
+        if img.extent.width > maxW {
+            let s = maxW / img.extent.width
+            img = img.transformed(by: CGAffineTransform(scaleX: s, y: s))
+        }
+        guard let data = streamCtx.jpegRepresentation(of: img, colorSpace: CGColorSpaceCreateDeviceRGB(),
+                                                      options: [sq: 0.6]) else { return }
+        var len = UInt32(data.count).bigEndian
+        FileHandle.standardOutput.write(Data(bytes: &len, count: 4))
+        FileHandle.standardOutput.write(data)
+    }
+    RunLoop.main.add(streamTimer, forMode: .common)
+}
 
 if opts.preview {
     let app = NSApplication.shared

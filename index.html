@@ -305,9 +305,10 @@
 
 <script>
 (() => {
-  // gating — same numbers as the recorded-session pipeline
+  // gating — same numbers as the server-side pipeline; the video itself is
+  // never sent anywhere, only these gated snaps (at most one per MIN_GAP_MS)
   const DIRTY_AT = 0.20, STABLE_AT = 0.10, PIXEL_STEP = 24;
-  const GATE_MS = 250, FIRST_LOOK_MS = 2000, MAX_DIRTY_MS = 20000, GATE_W = 160, GATE_H = 120;
+  const GATE_MS = 250, FIRST_LOOK_MS = 2000, MAX_DIRTY_MS = 20000, MIN_GAP_MS = 5000, GATE_W = 160, GATE_H = 120;
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const el = id => document.getElementById(id);
@@ -320,7 +321,7 @@
   let serverStatus = "watching";
   let pending = [];           // snap ids we sent, awaiting their check
   let manualPending = false;
-  let lastGate = null, dirtySince = 0, firstLookAt = 0, armed = false;
+  let lastGate = null, dirtySince = 0, firstLookAt = 0, armed = false, lastSnapAt = 0;
   let lastFrameN = -1, checkCount = -1, failedAt = 0;
   let replayTop = null, replayUnder = null;
 
@@ -441,9 +442,10 @@
       session.signal.push([Math.round(performance.now() - session.start), changed]);
     const now = performance.now();
     if (changed !== null && changed > DIRTY_AT) { if (!dirtySince) dirtySince = now; writing = true; }
-    if (!armed && now >= firstLookAt) { armed = true; snap("first look"); }
-    else if (dirtySince && changed !== null && changed < STABLE_AT) { dirtySince = 0; writing = false; snap("page settled"); }
-    else if (dirtySince && now - dirtySince > MAX_DIRTY_MS) { dirtySince = now; snap("checking in"); }
+    const gapOk = now - lastSnapAt >= MIN_GAP_MS;
+    if (!armed && now >= firstLookAt) { armed = true; lastSnapAt = now; snap("first look"); }
+    else if (dirtySince && changed !== null && changed < STABLE_AT && gapOk) { dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
+    else if (dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk) { dirtySince = now; lastSnapAt = now; snap("checking in"); }
     if (changed !== null && changed < STABLE_AT && !dirtySince) writing = false;
     setStatus();
   }
@@ -481,6 +483,21 @@
       Object.assign(f.style, { left: feed.left + "px", top: (feed.top + window.scrollY - window.scrollY) + "px", width: "75px", height: "56px", opacity: 0.4 });
     }));
     setTimeout(() => f.remove(), 450);
+  }
+
+  // ---------- deskview live stream ----------
+  let streamFailed = false;
+  function startStream() {
+    const img = document.createElement("img");
+    img.className = "replay under";
+    img.alt = "Live Desk View of the page";
+    img.src = "/stream";
+    img.onerror = () => {         // stream unavailable: fall back to ~1/s frame polling
+      img.remove();
+      streamFailed = true;
+      lastFrameN = -1;
+    };
+    el("framewrap").prepend(img);
   }
 
   // ---------- replay mode stage ----------
@@ -710,8 +727,9 @@
         startCamera().then(() => { if (s.session_panel) showConsent(); });
       } else if (mode === "deskview") {
         el("sessionbtn").hidden = false;
-        el("caption").textContent = "Live from the Desk View camera — a new frame every second or two. Only the snapshots on the right are read by Claude.";
+        el("caption").textContent = "Live from the Desk View camera. Only the snapshots on the right are read by Claude.";
         el("checknow").disabled = false;
+        startStream();
         if (s.session_panel) showConsent();
       } else {
         el("demomark").hidden = false;
@@ -719,10 +737,10 @@
         el("checknow").disabled = false;
       }
     }
-    if (mode !== "live") {
+    if (mode === "replay" || (mode === "deskview" && streamFailed)) {
       if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
-      if (s.status === "watching") manualPending = false;
     }
+    if (mode !== "live" && s.status === "watching") manualPending = false;
     if (mode === "deskview" && s.cap_error && !poll.capErrShown) {
       poll.capErrShown = true;
       showOffline(["The Desk View camera couldn't run.",

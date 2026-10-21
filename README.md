@@ -39,7 +39,8 @@ Browsers can't open that camera, so this mode captures through `deskcap`,
 a small Swift tool that builds itself from the bundled source on first
 run (needs the Xcode command line tools: `xcode-select --install`), and
 your terminal app needs camera permission — macOS asks once. The page
-shows the camera's view at about a frame per second.
+shows live video streamed from the tool, so framing the page is easy —
+the video is display-only and never leaves your machine.
 
 **Browser mode** works on any Mac with any camera the browser can see:
 the built-in one (hold the page up facing the screen), a webcam, or an
@@ -84,12 +85,12 @@ Handy: symlink it onto your PATH so it's one word from anywhere:
 
 ## What gets sent where
 
-The live video never leaves the page — it isn't streamed, recorded, or
-uploaded. The browser compares frames locally, and only when your page
-has changed and settled does it send one snapshot to the local server,
-which reads it through your own `claude` login. Every check in the
-margin shows a thumbnail of exactly the frame that was read — typically
-a few per problem, not a stream. Snapshots are kept on your machine in
+The live video is for your eyes only — it's never recorded, uploaded,
+or shown to the AI. Frames are compared locally, and only when your page
+has changed and settled does one snapshot go to the local server, which
+reads it through your own `claude` login — never more than one every
+5 seconds, and typically just a few per problem. Every check in the
+margin shows a thumbnail of exactly the frame that was read. Snapshots are kept on your machine in
 `~/deskcap/check-<timestamp>/`. Pause camera stops the device entirely.
 
 ## How it works
