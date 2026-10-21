@@ -49,6 +49,25 @@ cono-check --port 9000           # serve somewhere else (default: 8763)
 cono-check --no-open             # don't open the browser automatically
 ```
 
+## Record a 10-minute session
+
+```bash
+cono-check session
+```
+
+For developing the checking itself: a consented, contained recording of
+one real work session. After you click "Start recording," Cono saves a
+photo of your page every 3 seconds for 10 minutes — plus every snapshot
+it reads, every note it writes (each check rotates through four feedback
+styles so sessions also measure what kind of help works), the page-change
+signal, and your button presses — into one local folder
+(`~/deskcap/session-<timestamp>/`, with a `session.json` manifest). When
+the clock runs out you rate each note (Helped / Didn't help / Wrong) and
+answer two questions; one click deletes the whole folder if you want it
+gone. Nothing records before the consent click, and nothing leaves the
+machine beyond the normal snapshot path. The same flow starts from the
+"Record a 10-minute session" button under the video in normal live mode.
+
 Handy: symlink it onto your PATH so it's one word from anywhere:
 `ln -s "$PWD/cono-check/cono-check" /opt/homebrew/bin/cono-check`
 

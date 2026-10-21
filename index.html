@@ -230,6 +230,38 @@
     z-index: 10;
     transition: all 0.4s ease-out;
   }
+
+  /* 10-minute recorded session */
+  header .rec { color: var(--lamp); font-size: 14px; }
+  header .rec::before { content: "● "; }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 20px 22px;
+    margin-top: 14px;
+    max-width: 56ch;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .panel p { color: var(--faded); font-size: 14px; margin-bottom: 10px; }
+  .panel .row { display: flex; gap: 14px; align-items: center; margin-top: 12px; }
+  .panel textarea, .panel input[type=text] {
+    width: 100%;
+    background: var(--desk);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--paper);
+    font: inherit;
+    font-size: 14px;
+    padding: 7px 10px;
+  }
+  .panel .checkview { display: flex; gap: 14px; margin: 12px 0; }
+  .panel .checkview img { height: 76px; border-radius: 4px; }
+  .panel .checkview .note { font-size: 14px; color: var(--paper); max-width: 44ch; }
+  .panel .verdicts button.on { border-color: var(--lamp); color: var(--lamp); }
+  .framingline { color: var(--lamp); font-size: 13.5px; text-align: center; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -237,6 +269,7 @@
   <h1>Cono check</h1>
   <span class="demo-mark" id="demomark" hidden>demo</span>
   <span class="status"><span class="lampdot" id="lamp"></span><b id="statusword" class="calm">starting</b><span id="statusrest"></span></span>
+  <span class="rec" id="rec" hidden></span>
 </header>
 
 <div id="banner" role="status">Lost the local server — restart cono-check in your terminal.</div>
@@ -249,11 +282,15 @@
       <div class="snapring" id="snapring"></div>
     </div>
     <figcaption id="caption">Starting…</figcaption>
+    <div class="framingline" id="framingline" hidden>Fix the framing before you start working — see the first note on the right.</div>
     <div class="controls">
       <button class="pill" id="checknow" type="button" disabled>Check now</button>
       <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
+      <button class="quiet" id="sessionbtn" type="button" hidden>Record a 10-minute session</button>
+      <button class="quiet" id="endbtn" type="button" hidden>End session</button>
       <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
     </div>
+    <div id="sessionpanel" hidden></div>
   </figure>
 
   <section class="notes" aria-live="polite">
@@ -355,6 +392,7 @@
 
   el("camerapick").addEventListener("change", () => {
     localStorage.setItem("cono-camera", el("camerapick").value);
+    sessionEvent("camera_change");
     stopTracks();
     startCamera();
   });
@@ -364,6 +402,7 @@
 
   el("pausebtn").addEventListener("click", () => {
     paused = !paused;
+    if (session) { session.paused = paused; sessionEvent(paused ? "pause" : "resume"); }
     if (paused) {
       stopTracks();
       document.body.classList.add("paused");
@@ -398,6 +437,8 @@
       changed = n / gray.length;
     }
     lastGate = gray;
+    if (session && !session.paused && changed !== null)
+      session.signal.push([Math.round(performance.now() - session.start), changed]);
     const now = performance.now();
     if (changed !== null && changed > DIRTY_AT) { if (!dirtySince) dirtySince = now; writing = true; }
     if (!armed && now >= firstLookAt) { armed = true; snap("first look"); }
@@ -419,6 +460,7 @@
     if (!resp?.ok) return;
     const { id } = await resp.json();
     pending.push({ id, reason, at: Date.now() });
+    if (session) session.snaps.push(id);
     if (reason === "asked") manualPending = true;
     snapMoment(id);
     renderFeed(lastChecks);
@@ -501,9 +543,148 @@
   }
 
   el("checknow").addEventListener("click", () => {
-    if (mode === "live") snap("asked");
+    if (mode === "live") { snap("asked"); sessionEvent("check_now"); }
     else { manualPending = true; fetch("/check", { method: "POST" }); }
   });
+
+  // ---------- 10-minute recorded session ----------
+  const SESSION_S = 600, DENSE_MS = 3000;
+  let session = null;   // {start, left, timers:[], signal:[], snaps:[], paused}
+
+  function sessionEvent(type, extra = {}) {
+    if (session) fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) });
+  }
+
+  function grabJpeg() {
+    const v = el("video");
+    if (!v.videoWidth) return Promise.resolve(null);
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    return new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
+  }
+
+  function showConsent() {
+    const p = el("sessionpanel");
+    p.hidden = false;
+    p.innerHTML = `<div class="panel">
+      <h2>Record a 10-minute session?</h2>
+      <p>Cono will save a photo of your page every 3 seconds for 10 minutes, plus
+      every snapshot it reads and every note it writes — all into one folder on
+      this Mac. Nothing leaves this computer except the snapshots Claude already
+      reads through your own login. You can end it early, and you can delete the
+      whole folder afterwards with one click.</p>
+      <p>Frame the camera on your page, not on yourself.</p>
+      <div class="row"><button class="pill" id="consentgo">Start recording</button>
+      <button class="quiet" id="consentno">Not now</button></div></div>`;
+    el("consentgo").onclick = startSession;
+    el("consentno").onclick = () => { p.hidden = true; };
+  }
+
+  async function startSession() {
+    const track = stream?.getVideoTracks()[0];
+    await fetch("/session/start", { method: "POST", body: JSON.stringify({
+      camera_label: track?.label || "",
+      video_res: [el("video").videoWidth, el("video").videoHeight],
+    }) });
+    el("sessionpanel").hidden = true;
+    el("sessionbtn").hidden = true;
+    el("endbtn").hidden = false;
+    session = { start: performance.now(), left: SESSION_S, signal: [], snaps: [], paused: false, framingShown: false, timers: [] };
+    session.timers.push(setInterval(async () => {          // dense frames
+      if (session.paused) return;
+      const b = await grabJpeg();
+      if (b) fetch("/session/frame", { method: "POST", body: b });
+    }, DENSE_MS));
+    session.timers.push(setInterval(() => {                // gating signal batch
+      if (session.signal.length) {
+        fetch("/session/signal", { method: "POST", body: JSON.stringify(session.signal.splice(0)) });
+      }
+    }, 5000));
+    session.timers.push(setInterval(() => {                // countdown
+      if (!session.paused) {
+        session.left -= 1;
+        if (session.left <= 0) return endSession(false);
+      }
+      el("rec").textContent = session.paused ? "recording paused"
+        : `recording · ${Math.floor(session.left / 60)}:${String(session.left % 60).padStart(2, "0")} left`;
+    }, 1000));
+    el("rec").hidden = false;
+    el("rec").textContent = "recording · 10:00 left";
+  }
+
+  async function endSession(early) {
+    const s = session;
+    session = null;
+    s.timers.forEach(clearInterval);
+    el("rec").hidden = true;
+    el("endbtn").hidden = true;
+    el("framingline").hidden = true;
+    const final = await grabJpeg();
+    if (final) await fetch("/session/final", { method: "POST", body: final });
+    const info = await (await fetch("/session/end", { method: "POST", body: JSON.stringify({ ended_early: early }) })).json();
+    annotate(s.snaps, info);
+  }
+
+  function annotate(snaps, info) {
+    const entries = snaps
+      .map(id => lastChecks.find(c => c.snap === id))
+      .filter(Boolean)
+      .map(c => ({ snap: c.snap, check: c.check, verdict: "", note: "" }));
+    const p = el("sessionpanel");
+    p.hidden = false;
+    let i = 0;
+    const answers = { checks: entries, stuck: "", wanted: "" };
+    function stepCheck() {
+      if (i >= entries.length) return stepStuck();
+      const c = entries[i];
+      p.innerHTML = `<div class="panel">
+        <h2>Note ${i + 1} of ${entries.length}</h2>
+        <div class="checkview"><img src="/snap/${c.snap}" alt="Snapshot for this note">
+        <div class="note">${c.check ? c.check.replace(/</g, "&lt;") : "(no note)"}</div></div>
+        <div class="row verdicts">
+          <button class="pill" data-v="helped">Helped</button>
+          <button class="pill" data-v="didnt">Didn’t help</button>
+          <button class="pill" data-v="wrong">Wrong</button></div>
+        <div class="row"><input type="text" id="aNote" placeholder="What did you actually need here? (optional)"></div>
+        <div class="row"><button class="quiet" id="aNext">Next</button></div></div>`;
+      p.querySelectorAll(".verdicts .pill").forEach(b => b.onclick = () => {
+        c.verdict = b.dataset.v;
+        p.querySelectorAll(".verdicts .pill").forEach(x => x.classList.toggle("on", x === b));
+      });
+      el("aNext").onclick = () => { c.note = el("aNote").value; i++; stepCheck(); };
+    }
+    function stepStuck() {
+      p.innerHTML = `<div class="panel">
+        <h2>Two last questions</h2>
+        <p>Where were you stuck, if anywhere? (roughly when)</p>
+        <div class="row"><input type="text" id="aStuck"></div>
+        <p style="margin-top:12px">What kind of help did you want that you didn’t get?</p>
+        <div class="row"><input type="text" id="aWanted"></div>
+        <div class="row"><button class="pill" id="aDone">Save session</button></div></div>`;
+      el("aDone").onclick = async () => {
+        answers.stuck = el("aStuck").value;
+        answers.wanted = el("aWanted").value;
+        await fetch("/session/annotate", { method: "POST", body: JSON.stringify(answers) });
+        p.innerHTML = `<div class="panel">
+          <h2>Session saved</h2>
+          <p>${(info.path || "~/deskcap/session-…").replace(/</g, "&lt;")} (${info.mb ?? "?"} MB)</p>
+          <div class="row"><button class="quiet" id="aDelete">Delete this session</button>
+          <button class="pill" id="aClose">Done</button></div></div>`;
+        el("aClose").onclick = () => { p.hidden = true; el("sessionbtn").hidden = false; };
+        el("aDelete").onclick = async () => {
+          await fetch("/session/delete", { method: "POST" });
+          p.innerHTML = `<div class="panel"><h2>Session deleted</h2>
+            <div class="row"><button class="pill" id="aClose2">Done</button></div></div>`;
+          el("aClose2").onclick = () => { p.hidden = true; el("sessionbtn").hidden = false; };
+        };
+      };
+    }
+    stepCheck();
+  }
+
+  el("sessionbtn").addEventListener("click", showConsent);
+  el("endbtn").addEventListener("click", () => endSession(true));
 
   // ---------- state polling ----------
   async function poll() {
@@ -522,7 +703,8 @@
       mode = s.mode;
       if (mode === "live") {
         el("pausebtn").hidden = false;
-        startCamera();
+        el("sessionbtn").hidden = false;
+        startCamera().then(() => { if (s.session_panel) showConsent(); });
       } else {
         el("demomark").hidden = false;
         el("caption").textContent = "Replaying a recorded session — no camera in use.";
@@ -536,6 +718,13 @@
     if (s.checks.length !== checkCount || pending.length) {
       checkCount = s.checks.length;
       renderFeed(s.checks);
+    }
+    if (session && !session.framingShown && session.snaps.length) {
+      const first = s.checks.find(c => c.snap === session.snaps[0]);
+      if (first && first.visibility != null) {
+        session.framingShown = true;
+        el("framingline").hidden = first.visibility >= 5;
+      }
     }
     setStatus();
     setTimeout(poll, 1000);

@@ -13,6 +13,7 @@ Claude Code login, no API key) reads it and reports:
 
 Usage:
   cono-check                     # live camera, picked in the browser
+  cono-check session             # live, with the 10-minute recorded session panel open
   cono-check demo                # no camera needed: bundled sample session
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
@@ -41,7 +42,17 @@ Respond in EXACTLY this plain-text format, no markdown:
 
 VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts, fraction bars) are readable; note blur or glare.
 ON PAGE: transcribe what is written on the page exactly as written, preserving the student's own errors - never silently correct anything. If no page or writing is visible, say what IS visible instead.
-CHECK: 1-3 sentences checking the work. If there is a mistake, say exactly where it is (which line or step) and ask a guiding question - do not give the corrected answer. If the work looks right so far, confirm it and suggest the next step. If nothing is readable, give one concrete tip to fix the framing."""
+CHECK: {check_style} If nothing is readable, give one concrete tip to fix the framing."""
+
+# during a recorded session the CHECK paragraph rotates through these, so a
+# session also measures what KIND of help works; "question" is the default
+CHECK_STYLES = {
+    "question": "1-3 sentences checking the work. If there is a mistake, say exactly where it is (which line or step) and ask a guiding question - do not give the corrected answer. If the work looks right so far, confirm it and suggest the next step.",
+    "principle": "1-3 sentences. If there is a mistake, state the relevant rule, formula or principle that is being used or misused - without pointing at any specific line and without giving the corrected answer. If the work looks right so far, name the principle that makes the next step work.",
+    "point": "One sentence only. If there is a mistake, say only where to look again (which line or step) - no explanation, no question, no answer. If the work looks right so far, say so in one sentence.",
+    "next-step": "1-2 sentences. Do not hunt for errors. Say what a good next step from here would be - the kind of move to make, not the worked-out result. If the page is blank or barely started, suggest how to begin without giving the method away.",
+}
+STYLE_ORDER = ["question", "principle", "point", "next-step"]
 
 
 class State:
@@ -56,17 +67,99 @@ class State:
         self.checks = []                # newest first
         self.check_asap = False         # replay mode: Check now button
         self.snap_n = 0
+        self.session_panel = False      # `cono-check session`: open the consent panel
 
     def snapshot(self):
         with self.lock:
             return {
                 "status": self.status, "mode": self.mode, "model": self.model,
                 "frame": self.frame, "frame_n": self.frame_n,
-                "checks": self.checks[:30],
+                "checks": self.checks[:30], "session_panel": self.session_panel,
+                "session_active": SESSION.active,
             }
 
 
 STATE = State()
+
+
+class Session:
+    """A consented 10-minute recorded bundle (see plans/data-collection-spec.md)."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.active = False
+        self.dir = None
+        self.started = None             # epoch seconds
+        self.frame_n = 0
+        self.pauses = 0
+        self.style_i = 0
+        self.checks = []                # manifest entries, oldest first
+        self.meta = {}
+
+    def t(self):
+        return int((time.time() - self.started) * 1000)
+
+    def event(self, type_, **kw):
+        with self.lock:
+            if not self.active:
+                return
+            with open(self.dir / "events.jsonl", "a") as f:
+                f.write(json.dumps({"t": self.t(), "type": type_, **kw}) + "\n")
+
+    def start(self, meta):
+        with self.lock:
+            self.dir = Path.home() / "deskcap" / ("session-" + datetime.now().strftime("%Y-%m-%d-%H%M%S"))
+            (self.dir / "frames").mkdir(parents=True)
+            (self.dir / "snaps").mkdir()
+            (self.dir / "signal.csv").write_text("t,changed_frac\n")
+            self.started = time.time()
+            self.frame_n = 0
+            self.pauses = 0
+            self.style_i = 0
+            self.checks = []
+            self.meta = meta
+            self.active = True
+        self.event("start")
+        return str(self.dir)
+
+    def next_style(self):
+        with self.lock:
+            style = STYLE_ORDER[self.style_i % len(STYLE_ORDER)]
+            self.style_i += 1
+            return style
+
+    def manifest(self, ended_early):
+        frames = len(list((self.dir / "frames").glob("*.jpg")))
+        snaps = len(list((self.dir / "snaps").glob("*.jpg")))
+        return {
+            "version": 1,
+            "started": datetime.utcfromtimestamp(self.started).isoformat() + "Z",
+            "duration_s": round(time.time() - self.started),
+            "ended_early": ended_early,
+            "model": STATE.model,
+            "camera_label": self.meta.get("camera_label", ""),
+            "video_res": self.meta.get("video_res", []),
+            "gating": {"dirty_at": DIRTY_AT, "stable_at": STABLE_AT,
+                       "gate_ms": 250, "dense_ms": 3000},
+            "consent": {"version": 1, "accepted_at": self.meta.get("accepted_at", "")},
+            "counts": {"frames": frames, "snaps": snaps,
+                       "checks": len(self.checks), "pauses": self.pauses},
+            "checks": self.checks,
+            "annotations": {},
+        }
+
+    def end(self, ended_early):
+        with self.lock:
+            if not self.active:
+                return None
+            self.active = False
+        m = self.manifest(ended_early)
+        (self.dir / "session.json").write_text(json.dumps(m, indent=1))
+        size = sum(p.stat().st_size for p in self.dir.rglob("*") if p.is_file())
+        print(f"session saved: {self.dir}  ({size / 1e6:.0f} MB)")
+        return {"path": str(self.dir), "mb": round(size / 1e6)}
+
+
+SESSION = Session()
 
 # one check at a time; one waiting slot, newest snap wins, stale snaps drop
 PENDING = []
@@ -119,10 +212,10 @@ def parse_report(text):
     return out
 
 
-def run_claude(frame_path, model):
+def run_claude(frame_path, model, style="question"):
     r = subprocess.run(
         ["claude", "-p", "--model", model, "--allowedTools=Read"],
-        input=PROMPT.format(path=frame_path),
+        input=PROMPT.format(path=frame_path, check_style=CHECK_STYLES[style]),
         capture_output=True, text=True, timeout=180,
     )
     return r.stdout.strip() or r.stderr.strip() or "(no response)"
@@ -133,13 +226,33 @@ def checker(frames_dir):
         snap, reason = next_check()
         with STATE.lock:
             STATE.status = "checking"
+        in_session = SESSION.active
+        style = SESSION.next_style() if in_session else "question"
+        t = SESSION.t() if in_session else None
         entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap, "reason": reason}
+        t0 = time.time()
+        raw = ""
         try:
-            entry.update(parse_report(run_claude(frames_dir / snap, STATE.model)))
+            raw = run_claude(frames_dir / snap, STATE.model, style)
+            entry.update(parse_report(raw))
         except Exception:
             entry.update(visibility=None, visibility_note="", on_page="", failed=True,
                          check="Couldn't read this snapshot. Check that `claude` runs "
                                "in your terminal, then retry.")
+        latency = int((time.time() - t0) * 1000)
+        if in_session and SESSION.active:
+            try:
+                shutil.copy(frames_dir / snap, SESSION.dir / "snaps" / snap)
+            except OSError:
+                pass
+            record = {"t": t, "snap": snap, "reason": reason, "style": style,
+                      "latency_ms": latency, "visibility": entry.get("visibility"),
+                      "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
+                      "raw": raw, "annotation": None}
+            with SESSION.lock:
+                SESSION.checks.append(record)
+            SESSION.event("check_done", snap=snap, reason=reason, style=style,
+                          latency_ms=latency, visibility=entry.get("visibility"))
         with STATE.lock:
             STATE.checks.insert(0, entry)
             STATE.status = "watching"
@@ -225,20 +338,83 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send(404, b"not found", "text/plain")
 
+    def body(self):
+        size = int(self.headers.get("Content-Length", 0))
+        if not 0 <= size <= 12_000_000:
+            return None
+        return self.rfile.read(size)
+
     def do_POST(self):
         url = urlparse(self.path)
         q = parse_qs(url.query)
         if url.path == "/snap":                      # live mode: browser sends a JPEG
-            size = int(self.headers.get("Content-Length", 0))
-            if not 0 < size <= 12_000_000:
+            body = self.body()
+            if not body:
                 return self.send(400, b"bad size", "text/plain")
-            body = self.rfile.read(size)
             with STATE.lock:
                 STATE.snap_n += 1
                 name = f"snap-{STATE.snap_n:04d}.jpg"
             (self.frames_dir / name).write_bytes(body)
+            if SESSION.active:
+                SESSION.event("snap_sent", id=name, reason=q.get("reason", [""])[0])
             queue_check(name, q.get("reason", ["page settled"])[0])
             self.send(200, json.dumps({"id": name}).encode(), "application/json")
+        elif url.path == "/session/start":
+            meta = json.loads(self.body() or b"{}")
+            meta["accepted_at"] = datetime.utcnow().isoformat() + "Z"
+            path = SESSION.start(meta)
+            self.send(200, json.dumps({"path": path}).encode(), "application/json")
+        elif url.path == "/session/frame" and SESSION.active:
+            body = self.body()
+            if not body:
+                return self.send(400, b"bad size", "text/plain")
+            with SESSION.lock:
+                SESSION.frame_n += 1
+                name = f"frame-{SESSION.frame_n:04d}.jpg"
+            (SESSION.dir / "frames" / name).write_bytes(body)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/signal" and SESSION.active:
+            pairs = json.loads(self.body() or b"[]")
+            with SESSION.lock:
+                with open(SESSION.dir / "signal.csv", "a") as f:
+                    f.writelines(f"{int(t)},{cf:.4f}\n" for t, cf in pairs)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/event" and SESSION.active:
+            ev = json.loads(self.body() or b"{}")
+            if ev.get("type") == "pause":
+                with SESSION.lock:
+                    SESSION.pauses += 1
+            SESSION.event(ev.pop("type", "event"), **ev)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/final" and SESSION.active:
+            body = self.body()
+            if body:
+                (SESSION.dir / "page-final.jpg").write_bytes(body)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/end":
+            result = SESSION.end(json.loads(self.body() or b"{}").get("ended_early", False))
+            self.send(200, json.dumps(result or {}).encode(), "application/json")
+        elif url.path == "/session/annotate":       # after end: merge annotations
+            notes = json.loads(self.body() or b"{}")
+            mf = SESSION.dir / "session.json" if SESSION.dir else None
+            if mf and mf.exists():
+                m = json.loads(mf.read_text())
+                by_snap = {a["snap"]: a for a in notes.get("checks", [])}
+                for c in m["checks"]:
+                    if c["snap"] in by_snap:
+                        a = by_snap[c["snap"]]
+                        c["annotation"] = {"verdict": a.get("verdict", ""), "note": a.get("note", "")}
+                m["annotations"] = {"stuck": notes.get("stuck", ""), "wanted": notes.get("wanted", "")}
+                mf.write_text(json.dumps(m, indent=1))
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/delete":
+            d = SESSION.dir
+            if d and not SESSION.active and d.parent == Path.home() / "deskcap" \
+                    and d.name.startswith("session-") and d.exists():
+                shutil.rmtree(d)
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"no session to delete", "text/plain")
         elif url.path == "/retry":                   # re-run a failed check
             name = Path(q.get("snap", [""])[0]).name
             if (self.frames_dir / name).exists():
@@ -271,6 +447,9 @@ def main():
             del args[i:i + 2]
     if args and args[0] == "demo":
         replay_dir = str(SAMPLE)
+    if args and args[0] == "session":
+        with STATE.lock:
+            STATE.session_panel = True
 
     if not shutil.which("claude"):
         sys.exit("The `claude` CLI is required (it does the reading): https://claude.com/claude-code\n"
