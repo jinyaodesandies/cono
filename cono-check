@@ -179,6 +179,7 @@ class Session:
         (self.dir / "session.json").write_text(json.dumps(m, indent=1))
         size = sum(p.stat().st_size for p in self.dir.rglob("*") if p.is_file())
         print(f"session saved: {self.dir}  ({size / 1e6:.0f} MB)")
+        print(f"config sweep:  {HERE / 'tools' / 'experiment.py'} {self.dir}")
         return {"path": str(self.dir), "mb": round(size / 1e6),
                 "checks": [{"snap": c["snap"], "check": c["check"]} for c in self.checks]}
 

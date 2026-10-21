@@ -80,6 +80,14 @@ gone. Nothing records before the consent click, and nothing leaves the
 machine beyond the normal snapshot path. The same flow starts from the
 "Record a 10-minute session" button under the video in normal live mode.
 
+When the session ends it prints a one-line config sweep command:
+`tools/experiment.py` replays the recording through a matrix of snap
+frequencies, image preprocessing (contrast/sharpen, downscale,
+grayscale), and prompt structures (literal line-numbered transcription,
+transcribe-then-reason), and writes a side-by-side `report.md` — every
+config judged against the same ten minutes of real work. Needs Pillow
+(`pip install pillow`); costs real `claude` calls.
+
 Handy: symlink it onto your PATH so it's one word from anywhere:
 `ln -s "$PWD/cono-check/cono-check" /opt/homebrew/bin/cono-check`
 
