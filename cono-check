@@ -59,12 +59,23 @@ MAX_DIRTY_S = 20      # mid-activity "checking in" snap after this long dirty
 MIN_GAP_S = 5         # hard floor between automatic snaps sent to Claude
 
 PROMPT = """You are Cono, an AI study tutor watching a student's paper through a camera (a top-down or handheld view of the page). Read the image file: {path}
-
+{context}
 Respond in EXACTLY this plain-text format, no markdown:
 
 VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts, fraction bars) are readable; note blur or glare.
-ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. After transcribing, re-read the image once and fix only your transcription mistakes, never the student's math. If no page or writing is visible, say what IS visible instead.
-CHECK: {check_style} Refer to lines by their L-numbers. If nothing is readable, give one concrete tip to fix the framing."""
+WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
+ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
+CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. If there is no new student work, CHECK must be at most one short line. If nothing is readable, give one concrete tip to fix the framing.
+KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed."""
+
+CONTEXT_BLOCK = """
+Context from your earlier looks (for WORKING ON and CHECK only - always transcribe from the image, not from this):
+Earlier page reading:
+{last_on_page}
+Your recent notes to the student (do not repeat these):
+{last_checks}
+If the page has flipped to a different sheet, treat it as fresh context and name the new page in WORKING ON.
+"""
 
 # during a recorded session the CHECK paragraph rotates through these, so a
 # session also measures what KIND of help works; "question" is the default
@@ -93,15 +104,17 @@ TRANSCRIBE_PROMPT = """You are a transcription engine for a study tutor. Read th
 Respond in EXACTLY this plain-text format, no markdown:
 
 VISIBILITY: n/10 - one line: what the camera sees and whether small details are readable; note blur or glare.
+WORKING ON: 3-8 words naming what the student is currently doing, or "nothing new". Never a full sentence.
 ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. If no page or writing is visible, say what IS visible instead."""
 
 REASON_PROMPT = """You are Cono, an AI study tutor. A faithful transcription of the student's handwritten page (their own errors preserved) is:
 
 {transcript}
-
+{context}
 Respond in EXACTLY this plain-text format, no markdown:
 
-CHECK: {check_style} Refer to lines by their L-numbers."""
+CHECK: {check_style} Refer to problems by the worksheet's own printed labels when they exist; use L-numbers only for unlabeled lines. Put confirmations before issues. Comment only on student work that is new since your earlier notes; never repeat them and never list blank items. If there is no new student work, at most one short line.
+KIND: one word - "confirm", "fix", "idle", or "setup"."""
 
 
 class State:
@@ -118,6 +131,8 @@ class State:
         self.snap_n = 0
         self.session_panel = False      # `cono-check session`: open the consent panel
         self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
+        self.last_on_page = ""          # page-state memory: latest good transcription
+        self.last_checks = []           # ...and the last few notes given (don't repeat)
 
     def snapshot(self):
         with self.lock:
@@ -274,11 +289,12 @@ def next_check():
 
 
 def parse_report(text):
-    """Split Claude's reply into visibility score/note, transcription, check."""
-    out = {"visibility": None, "visibility_note": "", "on_page": "", "check": ""}
+    """Split Claude's reply into its fields."""
+    out = {"visibility": None, "visibility_note": "", "working_on": "",
+           "on_page": "", "check": "", "kind": ""}
     field = None
     for line in text.splitlines():
-        m = re.match(r"\s*(VISIBILITY|ON PAGE|CHECK)\s*:\s*(.*)", line, re.I)
+        m = re.match(r"\s*(VISIBILITY|WORKING ON|ON PAGE|CHECK|KIND)\s*:\s*(.*)", line, re.I)
         if m:
             field = m.group(1).upper()
             rest = m.group(2)
@@ -289,8 +305,13 @@ def parse_report(text):
                     out["visibility_note"] = score.group(2).strip()
                 else:
                     out["visibility_note"] = rest.strip()
+            elif field == "WORKING ON":
+                out["working_on"] = rest.strip().strip('"')
             elif field == "ON PAGE":
                 out["on_page"] = rest.strip()
+            elif field == "KIND":
+                k = rest.strip().strip('".').lower()
+                out["kind"] = k if k in ("confirm", "fix", "idle", "setup") else ""
             else:
                 out["check"] = rest.strip()
         elif field == "ON PAGE":
@@ -300,6 +321,13 @@ def parse_report(text):
     out["on_page"], out["check"] = out["on_page"].strip(), out["check"].strip()
     if not any([out["visibility_note"], out["on_page"], out["check"]]):
         out["check"] = text.strip()     # model ignored the format: show it anyway
+    if not out["kind"]:                 # degrade gracefully when KIND is missing
+        if (out["visibility"] or 0) <= 3:
+            out["kind"] = "setup"
+        elif "?" not in out["check"] and (out["visibility"] or 0) >= 7:
+            out["kind"] = "confirm"
+        else:
+            out["kind"] = "fix"
     return out
 
 
@@ -335,6 +363,11 @@ def checker(frames_dir):
         entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap, "reason": reason}
         t0 = time.time()
         raw = ""
+        with STATE.lock:
+            context = CONTEXT_BLOCK.format(
+                last_on_page=STATE.last_on_page[:1500],
+                last_checks="\n".join(f"- {c}" for c in STATE.last_checks) or "(none yet)",
+            ) if STATE.last_on_page or STATE.last_checks else ""
         try:
             send = shrink_for_model(frames_dir / snap, cfg["width"])
             if cfg["structure"] == "twopass":
@@ -342,13 +375,22 @@ def checker(frames_dir):
                 entry.update(parse_report(raw1))
                 raw2 = claude_call(REASON_PROMPT.format(
                     transcript=entry.get("on_page") or "(nothing transcribed)",
+                    context=context,
                     check_style=CHECK_STYLES[cfg["style"]]), STATE.model, read=False)
-                entry["check"] = parse_report(raw2)["check"] or raw2
+                p2 = parse_report(raw2)
+                entry["check"] = p2["check"] or raw2
+                entry["kind"] = p2["kind"]
                 raw = raw1 + "\n--- pass 2 ---\n" + raw2
             else:
-                raw = claude_call(PROMPT.format(path=send, check_style=CHECK_STYLES[cfg["style"]]),
+                raw = claude_call(PROMPT.format(path=send, context=context,
+                                                check_style=CHECK_STYLES[cfg["style"]]),
                                   STATE.model)
                 entry.update(parse_report(raw))
+            with STATE.lock:            # remember what we saw and said
+                if entry.get("on_page") and entry.get("kind") != "setup":
+                    STATE.last_on_page = entry["on_page"]
+                if entry.get("check") and entry.get("kind") in ("confirm", "fix"):
+                    STATE.last_checks = (STATE.last_checks + [entry["check"]])[-3:]
         except Exception:
             entry.update(visibility=None, visibility_note="", on_page="", failed=True,
                          check="Couldn't read this snapshot. Check that `claude` runs "
