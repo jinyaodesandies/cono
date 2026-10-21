@@ -15,11 +15,20 @@
   `tools/make-sample.py` only if the sample itself needs to change — the
   committed frames are the stable test fixture (`sample/` math,
   `sample-chem/` chemistry via tools/make-chem-sample.py).
-- The model reply contract is VISIBILITY / WORKING ON / ON PAGE / CHECK /
-  KIND(confirm|fix|idle|setup); the UI renders no card for idle/setup —
-  the ribbon carries them. CHECK language rules live in
+- The model reply contract is VISIBILITY / WORKING ON / PROBLEM / ON PAGE /
+  TALLY / CHECK / KIND(confirm|fix|idle|setup) / GRID / EQUATIONS, in that
+  order — fast fields first, because the reply streams (claude -p
+  stream-json both ways, partial messages on, MAX_THINKING_TOKENS=0; the
+  TALLY line replaces thinking for counting accuracy and CHECK must agree
+  with it). The UI renders no dialogue message for idle/setup — the quiet
+  line and readability map carry them. CHECK language rules live in
   `../plans/feedback-policy.md` (private repo) — change prompts there
   first, then compile into CHECK_STYLES.
+- The twin state (problem card, per-problem threads + explicit-ask ladder
+  counts, grid, equations) lives in STATE and reaches the browser via
+  /state polls plus /events SSE deltas. Chat is /chat (text + optional
+  pen-point anchor; anchors get a sips full-res crop), Next is /next.
+  Default port is 8764 (variant T installs beside the other variant).
 - Checks remember the page via STATE.last_on_page/last_checks; stuck
   nudges fire after STUCK_S (env CONO_STUCK_S for tests) of quiet.
 - `cono-check doctor` is the preflight; keep it passing after changes.
