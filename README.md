@@ -31,12 +31,13 @@ installed and logged in (`claude` does the reading — no API key setup).
 ## Use it on your own work
 
 ```bash
-cono-check/cono-check deskview   # the Mac's Desk View camera — top-down on your page
-cono-check/cono-check            # or: any camera the browser can see
+cono-check/cono-check            # the Desk View camera — top-down on your page
+cono-check/cono-check browser    # fallback: any camera the browser can see
 ```
 
-**Desk View** is the real thing: the Mac's top-down desk camera (built in
-on M4-and-later Macs), so the page lies flat where you naturally write.
+**Desk View is the default and the point**: the Mac's top-down desk
+camera (built in on M4-and-later Macs) watches the page lying flat where
+you naturally write — Cono looks at your desk, not at you.
 Browsers can't open that camera, so this mode captures through `deskcap`,
 a small Swift tool that builds itself from the bundled source on first
 run (needs the Xcode command line tools: `xcode-select --install`), and
@@ -44,7 +45,8 @@ your terminal app needs camera permission — macOS asks once. The page
 shows live video streamed from the tool, so framing the page is easy —
 the video is display-only and never leaves your machine.
 
-**Browser mode** works on any Mac with any camera the browser can see:
+**Browser mode** (`cono-check browser`) is the fallback for Macs without
+Desk View — it works with any camera the browser can see:
 the built-in one (hold the page up facing the screen), a webcam, or an
 iPhone near your Mac via Continuity Camera — pick one from the camera
 menu under the video. If the picture keeps cropping to your face, turn

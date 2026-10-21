@@ -12,10 +12,10 @@ Claude Code login, no API key) reads it and reports:
   check             hint-first: where the mistake is, never the answer
 
 Usage:
-  cono-check                     # live camera, picked in the browser
-  cono-check deskview            # the Mac's Desk View camera (top-down), via deskcap
-  cono-check session             # 10-minute recorded session panel open (combines: deskview session)
-  cono-check demo                # no camera needed: bundled sample session
+  cono-check                     # the Desk View camera (top-down on your desk) - the default
+  cono-check browser             # fallback: any browser camera (iPhone Continuity, webcam)
+  cono-check session             # 10-minute recorded session (Desk View)
+  cono-check demo                # no camera needed: bundled sample session (demo chem = chemistry)
   cono-check doctor              # preflight: is everything ready to run?
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
@@ -740,15 +740,14 @@ def main():
                 v if flag == "--replay" else replay_dir,
             )
             del args[i:i + 2]
-    deskview = "deskview" in args or "deskcap" in args
     if "demo" in args:
         replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
     if "session" in args:
         with STATE.lock:
             STATE.session_panel = True
-        deskview = deskview or not replay_dir   # a recorded session means Desk View
-    if "live" in args:
-        deskview = False
+    # Desk View IS the product: top-down on the page is the default; the
+    # browser camera (selfie view) is the explicit fallback, never the default.
+    deskview = not replay_dir and not ("live" in args or "browser" in args)
 
     if not shutil.which("claude"):
         sys.exit("The `claude` CLI is required (it does the reading): https://claude.com/claude-code\n"

@@ -833,7 +833,8 @@
       poll.capErrShown = true;
       showOffline(["The Desk View camera couldn't run.",
         s.cap_error + " Close other camera apps, or allow camera access for your " +
-        "terminal app in System Settings → Privacy & Security → Camera — then try again."],
+        "terminal app in System Settings → Privacy & Security → Camera — then try again. " +
+        "(No Desk View on this Mac? Restart as `cono-check browser` to use an iPhone or webcam.)"],
         async () => {
           const r = await fetch("/camera/retry", { method: "POST" });
           if (r.ok) {
