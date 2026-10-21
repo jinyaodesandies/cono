@@ -142,6 +142,7 @@ class State:
         self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
         self.last_on_page = ""          # page-state memory: latest good transcription
         self.last_checks = []           # ...and the last few notes given (don't repeat)
+        self.checking_n = 0             # checks in flight (two workers)
 
     def snapshot(self):
         with self.lock:
@@ -365,10 +366,11 @@ def checker(frames_dir):
     while True:
         snap, reason = next_check()
         with STATE.lock:
+            STATE.checking_n += 1
             STATE.status = "checking"
         in_session = SESSION.active
         cfg = SESSION.next_config() if in_session else \
-            {"style": "question", "structure": "single", "width": 1280}
+            {"style": "question", "structure": "single", "width": 960}
         if reason == "stuck?":
             cfg = {**cfg, "style": "next-step", "structure": "single"}
         t = SESSION.t() if in_session else None
@@ -428,7 +430,9 @@ def checker(frames_dir):
                           latency_ms=latency, visibility=entry.get("visibility"))
         with STATE.lock:
             STATE.checks.insert(0, entry)
-            STATE.status = "watching"
+            STATE.checking_n -= 1
+            if STATE.checking_n <= 0:
+                STATE.status = "watching"
 
 
 def watcher(log_path, frames_dir):
@@ -789,7 +793,8 @@ def main():
         CAP["start"] = start_cap
         CAP["proc"] = cap = start_cap()
         threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
-    threading.Thread(target=checker, args=(out,), daemon=True).start()
+    for _ in range(2):      # two workers: a slow check never blocks the next
+        threading.Thread(target=checker, args=(out,), daemon=True).start()
 
     Handler.frames_dir = out
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)

@@ -109,6 +109,11 @@ reads it through your own `claude` login — never more than one every
 5 seconds, and typically just a few per problem. Every check in the
 margin shows a thumbnail of exactly the frame that was read.
 
+Every check answers visibly: real feedback arrives as a note card, and
+"nothing new" or "fix the framing" results appear as a quiet one-line
+acknowledgement, so the margin never goes silent. Two checks can run at
+once — a slow one never holds up the next.
+
 Checks work across STEM subjects — math derivations, chemistry
 (balancing, units, significant figures, subscripts read as written),
 and biology worksheets — and they remember the page: feedback covers

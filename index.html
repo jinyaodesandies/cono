@@ -604,11 +604,18 @@
       el("workingon").textContent = "working on: " + lastWorking;
     }
     const note = (latest.visibility_note || "").split(/(?<=\.)\s/)[0];
-    el("reframe").hidden = !(v != null && v <= 4 && note);
+    el("reframe").hidden = !(note && (latest.kind === "setup" || (v != null && v <= 4)));
     if (!el("reframe").hidden) el("reframe").textContent = "Reframe: " + note;
   }
+  function quietHTML(c) {
+    const txt = c.kind === "setup"
+      ? (c.check || c.visibility_note || "Fix the framing — see the camera chip.")
+      : (c.check && !/^nothing new/i.test(c.check) ? c.check
+         : "nothing new" + (lastWorking ? " — still on " + lastWorking : ""));
+    return `<div class="pendingline">${esc(c.time)} · ${esc(txt.slice(0, 160))}</div>`;
+  }
   function checkHTML(c) {
-    if (c.kind === "idle" || c.kind === "setup") return "";   // the ribbon carries these
+    if (c.kind === "idle" || c.kind === "setup") return quietHTML(c);
     const parts = (c.check || "").split(/(?<=[.?])\s+/);
     const say = parts.slice(0, 2).join(" ");
     const more = parts.slice(2).join(" ");
@@ -637,9 +644,9 @@
     pending = pending.filter(p => !done.has(p.id));
     if (!pending.length) manualPending = false;
     if (!checks.length && !pending.length) return;
-    const visible = checks.filter(c => c.kind !== "idle" && c.kind !== "setup");
-    const items = pending.map(pendingHTML).join("") + visible.slice(0, 3).map(checkHTML).join("");
-    const older = visible.slice(3);
+    const recent = checks.slice(0, 5);          // cards + quiet one-liners, in order
+    const older = checks.slice(5).filter(c => c.kind !== "idle" && c.kind !== "setup");
+    const items = pending.map(pendingHTML).join("") + recent.map(checkHTML).join("");
     el("feed").innerHTML = items + (older.length
       ? `<details class="older"><summary>${older.length} earlier ${older.length === 1 ? "note" : "notes"}</summary>${older.map(checkHTML).join("")}</details>`
       : "");
