@@ -65,7 +65,7 @@ Respond in EXACTLY this plain-text format, no markdown:
 VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts, fraction bars) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
 ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
-CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. If there is no new student work, CHECK must be at most one short line. If nothing is readable, give one concrete tip to fix the framing.
+CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. If there is no new student work, CHECK must be at most one short line. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed."""
 
 CONTEXT_BLOCK = """
@@ -77,14 +77,16 @@ Your recent notes to the student (do not repeat these):
 If the page has flipped to a different sheet, treat it as fresh context and name the new page in WORKING ON.
 """
 
-# during a recorded session the CHECK paragraph rotates through these, so a
-# session also measures what KIND of help works; "question" is the default
+# the four feedback moves (plans/feedback-policy.md is the source of truth);
+# "question" is the default; sessions rotate through all of them
 CHECK_STYLES = {
-    "question": "1-3 sentences checking the work. If there is a mistake, say exactly where it is (which line or step) and ask a guiding question - do not give the corrected answer. If the work looks right so far, confirm it and suggest the next step.",
-    "principle": "1-3 sentences. If there is a mistake, state the relevant rule, formula or principle that is being used or misused - without pointing at any specific line and without giving the corrected answer. If the work looks right so far, name the principle that makes the next step work.",
-    "point": "One sentence only. If there is a mistake, say only where to look again (which line or step) - no explanation, no question, no answer. If the work looks right so far, say so in one sentence.",
-    "next-step": "1-2 sentences. Do not hunt for errors. Say what a good next step from here would be - the kind of move to make, not the worked-out result. If the page is blank or barely started, suggest how to begin without giving the method away.",
+    "question": "ONE move, at most 2 sentences, plain warm tone, no exclamation marks, brief process praise only. If the newest work is right: confirm it using the student's own written words and point at the natural next step. If there is a mistake: ask ONE guiding question that implies where the error is - never state the corrected answer, value, or method name.",
+    "principle": "ONE move, at most 2 sentences, no exclamation marks. State the single rule, formula or principle the newest work uses or misuses, as a plain declarative - without pointing at a specific line and without the corrected answer. If the work is right, name the principle that makes the next step work.",
+    "point": "ONE sentence only. If there is a mistake, say only where to look again (the worksheet's own label) - no explanation, no answer. If the newest work is right, say so plainly.",
+    "next-step": "At most 2 sentences, no exclamation marks. Do not hunt for errors. Name the kind of move a good next step would be - not the worked-out result. If the student seems stuck or the page is barely started, offer ONE orientation nudge: restate what the problem asks or point at the first thing to decide.",
 }
+
+ESCALATION = """The student pressed "check now" themselves. If your recent notes already asked a guiding question about an error that is still unfixed with no new attempt, escalate instead of repeating: give ONE worked step toward fixing it (not the final answer). If you already gave a worked step for it, give the answer plainly and offer: "want to explain it back to me on paper?". Never refuse or moralize."""
 STYLE_ORDER = ["question", "principle", "point", "next-step"]
 
 # live-session experiment: each check rotates through these configs, and
@@ -383,7 +385,8 @@ def checker(frames_dir):
                 raw = raw1 + "\n--- pass 2 ---\n" + raw2
             else:
                 raw = claude_call(PROMPT.format(path=send, context=context,
-                                                check_style=CHECK_STYLES[cfg["style"]]),
+                                                check_style=CHECK_STYLES[cfg["style"]],
+                                                escalation=ESCALATION if reason == "asked" else ""),
                                   STATE.model)
                 entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
