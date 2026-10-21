@@ -57,6 +57,7 @@ DIRTY_AT = 0.20       # changed_frac above this = real activity (writing, hand)
 STABLE_AT = 0.10      # changed_frac below this = calm enough to read
 MAX_DIRTY_S = 20      # mid-activity "checking in" snap after this long dirty
 MIN_GAP_S = 5         # hard floor between automatic snaps sent to Claude
+STUCK_S = int(os.environ.get("CONO_STUCK_S", 120))   # quiet this long after writing = maybe stuck
 
 PROMPT = """You are Cono, an AI study tutor watching a student's paper through a camera (a top-down or handheld view of the page). Read the image file: {path}
 {context}
@@ -65,7 +66,7 @@ Respond in EXACTLY this plain-text format, no markdown:
 VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
 ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve scientific notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
-CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. If there is no new student work, CHECK must be at most one short line. For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. If nothing is readable, give one concrete tip to fix the framing. {escalation}
+CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed."""
 
 CONTEXT_BLOCK = """
@@ -86,7 +87,11 @@ CHECK_STYLES = {
     "next-step": "At most 2 sentences, no exclamation marks. Do not hunt for errors. Name the kind of move a good next step would be - not the worked-out result. If the student seems stuck or the page is barely started, offer ONE orientation nudge: restate what the problem asks or point at the first thing to decide.",
 }
 
+NO_NEW_RULE = "If there is no new student work, CHECK must be at most one short line."
+
 ESCALATION = """The student pressed "check now" themselves. If your recent notes already asked a guiding question about an error that is still unfixed with no new attempt, escalate instead of repeating: give ONE worked step toward fixing it (not the final answer). If you already gave a worked step for it, give the answer plainly and offer: "want to explain it back to me on paper?". Never refuse or moralize."""
+
+STUCK_NOTE = """The student has written nothing for a while and may be stuck. This check is the one exception to the no-new-work rule: even though nothing new is on the page, give ONE gentle orientation nudge about the problem they appear stopped on - restate what it asks in plain words, or name the first thing to decide, building on their last written step. Do not list tasks and do not mention the pause itself. Set KIND to "fix"."""
 STYLE_ORDER = ["question", "principle", "point", "next-step"]
 
 # live-session experiment: each check rotates through these configs, and
@@ -253,6 +258,7 @@ class Live:
 
 
 LIVE = Live()
+CAP = {"proc": None, "start": None}     # deskview capture process, restartable
 
 
 def stream_reader(stdout):
@@ -362,6 +368,8 @@ def checker(frames_dir):
         in_session = SESSION.active
         cfg = SESSION.next_config() if in_session else \
             {"style": "question", "structure": "single", "width": 1280}
+        if reason == "stuck?":
+            cfg = {**cfg, "style": "next-step", "structure": "single"}
         t = SESSION.t() if in_session else None
         entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap, "reason": reason}
         t0 = time.time()
@@ -385,9 +393,12 @@ def checker(frames_dir):
                 entry["kind"] = p2["kind"]
                 raw = raw1 + "\n--- pass 2 ---\n" + raw2
             else:
+                extra = ESCALATION if reason == "asked" else \
+                        STUCK_NOTE if reason == "stuck?" else ""
                 raw = claude_call(PROMPT.format(path=send, context=context,
                                                 check_style=CHECK_STYLES[cfg["style"]],
-                                                escalation=ESCALATION if reason == "asked" else ""),
+                                                no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
+                                                escalation=extra),
                                   STATE.model)
                 entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
@@ -427,12 +438,16 @@ def watcher(log_path, frames_dir):
     dirty = False
     dirty_since = 0.0
     last_queued = 0.0
+    last_active = 0.0
+    stuck_armed = False
     first_done = False
     while True:
         rows = []
         if log_path.exists():
             with open(log_path, newline="") as f:
                 rows = [r for r in csv.DictReader(f) if r.get("file")]
+        if len(rows) < seen:            # deskcap was restarted and rewrote its log
+            seen = 0
         for row in rows[seen:]:
             try:
                 changed = float(row["changed_frac"]) if row["changed_frac"] else None
@@ -460,6 +475,8 @@ def watcher(log_path, frames_dir):
                 if not dirty:
                     dirty_since = now
                 dirty = True
+                last_active = now
+                stuck_armed = True      # one nudge per writing burst
             settled = changed is not None and changed < STABLE_AT
             overdue = dirty and now - dirty_since > MAX_DIRTY_S
             if SESSION.active:          # session experiment: cadence loosens in thirds
@@ -473,6 +490,10 @@ def watcher(log_path, frames_dir):
                           else "page settled" if settled else "checking in")
                 queue_check(row["file"], reason)
                 first_done, dirty, last_queued = True, False, now
+            elif stuck_armed and first_done and not dirty \
+                    and now - max(last_active, last_queued) > STUCK_S:
+                queue_check(row["file"], "stuck?")
+                stuck_armed, last_queued = False, now
         seen = len(rows)
         time.sleep(1)
 
@@ -631,6 +652,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, b"{}", "application/json")
             else:
                 self.send(400, b"no session to delete", "text/plain")
+        elif url.path == "/camera/retry":            # deskview: relaunch deskcap
+            if CAP["start"] and (CAP["proc"] is None or CAP["proc"].poll() is not None):
+                with STATE.lock:
+                    STATE.cap_error = None
+                CAP["proc"] = CAP["start"]()
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"camera not restartable", "text/plain")
         elif url.path == "/retry":                   # re-run a failed check
             name = Path(q.get("snap", [""])[0]).name
             if (self.frames_dir / name).exists():
@@ -687,30 +716,39 @@ def main():
         threading.Thread(target=replay, args=(Path(replay_dir).expanduser(), out), daemon=True).start()
         threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
     elif deskview:
-        cap = subprocess.Popen(
-            [os.environ.get("CONO_DESKCAP") or str(ensure_deskcap()),
-             "--device", "deskview", "--interval", "1", "--stream", "12", "--out", str(out)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        threading.Thread(target=stream_reader, args=(cap.stdout,), daemon=True).start()
-        threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
+        deskcap_bin = os.environ.get("CONO_DESKCAP") or str(ensure_deskcap())
 
-        def cap_watch():
-            lines = [l.decode(errors="replace").strip() for l in cap.stderr if l.strip()]
-            cap.wait()
-            err = next((l for l in reversed(lines) if "deskcap:" in l), "")
-            with STATE.lock:
-                STATE.cap_error = err or \
-                    "The Desk View camera stopped — it may be in use by another app."
-            print(f"deskcap exited: {STATE.cap_error}")
-        threading.Thread(target=cap_watch, daemon=True).start()
+        def start_cap():
+            proc = subprocess.Popen(
+                [deskcap_bin, "--device", "deskview", "--interval", "1",
+                 "--stream", "12", "--out", str(out)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            threading.Thread(target=stream_reader, args=(proc.stdout,), daemon=True).start()
+
+            def cap_watch():
+                lines = [l.decode(errors="replace").strip() for l in proc.stderr if l.strip()]
+                proc.wait()
+                err = next((l for l in reversed(lines) if "deskcap:" in l), "")
+                with STATE.lock:
+                    STATE.cap_error = err or \
+                        "The Desk View camera stopped — it may be in use by another app."
+                print(f"deskcap exited: {STATE.cap_error}")
+            threading.Thread(target=cap_watch, daemon=True).start()
+            return proc
+
+        CAP["start"] = start_cap
+        CAP["proc"] = cap = start_cap()
+        threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
     threading.Thread(target=checker, args=(out,), daemon=True).start()
 
     Handler.frames_dir = out
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
     def stop(*_):
-        if cap:
+        if CAP["proc"]:
+            CAP["proc"].terminate()
+        elif cap:
             cap.terminate()
         print(f"\nstopped. snaps kept in {out}")
         sys.exit(0)

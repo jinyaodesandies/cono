@@ -376,6 +376,8 @@
   let pending = [];           // snap ids we sent, awaiting their check
   let manualPending = false;
   let lastGate = null, dirtySince = 0, firstLookAt = 0, armed = false, lastSnapAt = 0;
+  let lastActive = 0, stuckArmed = false;
+  const STUCK_MS = 120000;
   let lastFrameN = -1, checkCount = -1, failedAt = 0;
   let replayTop = null, replayUnder = null;
 
@@ -413,7 +415,7 @@
       }
       return showOffline(e.name === "NotFoundError"
         ? ["No camera found.", "An iPhone near your Mac shows up as a camera here — unlock it and check the picker."]
-        : ["Cono needs your camera.", "Your browser blocked camera access for this page. Allow it — usually the camera icon in the address bar — then try again."], true);
+        : ["Cono needs your camera.", "Your browser blocked camera access for this page. Allow it — usually the camera icon in the address bar — then try again."], startCamera);
     }
     el("offline").style.display = "none";
     el("video").hidden = false;
@@ -427,13 +429,13 @@
     fillPicker();
   }
 
-  function showOffline([head, body], retry) {
+  function showOffline([head, body], retryFn) {
     const o = el("offline");
     o.innerHTML = `<h2>${esc(head)}</h2><p>${esc(body)}</p>` +
-                  (retry ? `<button class="pill" id="retrycam" type="button">Try again</button>` : "");
+                  (retryFn ? `<button class="pill" id="retrycam" type="button">Try again</button>` : "");
     o.style.display = "block";
     el("video").hidden = true;
-    if (retry) el("retrycam").onclick = startCamera;
+    if (retryFn) el("retrycam").onclick = retryFn;
   }
 
   async function fillPicker() {
@@ -495,13 +497,14 @@
     if (session && !session.paused && changed !== null)
       session.signal.push([Math.round(performance.now() - session.start), changed]);
     const now = performance.now();
-    if (changed !== null && changed > DIRTY_AT) { if (!dirtySince) dirtySince = now; writing = true; }
+    if (changed !== null && changed > DIRTY_AT) { if (!dirtySince) dirtySince = now; writing = true; lastActive = now; stuckArmed = true; }
     const elapsed = session ? (now - session.start) / 1000 : -1;
     const minGap = session ? (elapsed < 200 ? 5000 : elapsed < 400 ? 12000 : 20000) : MIN_GAP_MS;
     const gapOk = now - lastSnapAt >= minGap;
     if (!armed && now >= firstLookAt) { armed = true; lastSnapAt = now; snap("first look"); }
     else if (dirtySince && changed !== null && changed < STABLE_AT && gapOk) { dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
     else if (dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk) { dirtySince = now; lastSnapAt = now; snap("checking in"); }
+    else if (armed && stuckArmed && !dirtySince && now - Math.max(lastActive, lastSnapAt) > STUCK_MS) { stuckArmed = false; lastSnapAt = now; snap("stuck?"); }
     if (changed !== null && changed < STABLE_AT && !dirtySince) writing = false;
     setStatus();
   }
@@ -829,8 +832,17 @@
     if (mode === "deskview" && s.cap_error && !poll.capErrShown) {
       poll.capErrShown = true;
       showOffline(["The Desk View camera couldn't run.",
-        s.cap_error + " If this is a permission problem, allow camera access for your " +
-        "terminal app in System Settings → Privacy & Security → Camera, then restart cono-check."], false);
+        s.cap_error + " Close other camera apps, or allow camera access for your " +
+        "terminal app in System Settings → Privacy & Security → Camera — then try again."],
+        async () => {
+          const r = await fetch("/camera/retry", { method: "POST" });
+          if (r.ok) {
+            poll.capErrShown = false;
+            el("offline").style.display = "none";
+            el("caption").textContent = "Live from the Desk View camera. Only the snapshots on the right are read by Claude.";
+            startStream();
+          }
+        });
       el("caption").textContent = "";
     }
     if (s.checks.length !== checkCount || pending.length) {
