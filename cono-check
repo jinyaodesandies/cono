@@ -93,12 +93,13 @@ STYLE_ORDER = ["question", "principle", "point", "next-step"]
 # the manifest records which config produced which check. The snap cadence
 # also loosens through the session (watcher/gateTick: 5s → 12s → 20s floors).
 SESSION_CONFIGS = [
+    # 1920 dropped after session 2026-10-21: slowest width, no quality gain
     {"style": "question",  "structure": "single",  "width": 1280},
     {"style": "principle", "structure": "single",  "width": 1280},
     {"style": "point",     "structure": "single",  "width": 960},
     {"style": "next-step", "structure": "single",  "width": 1280},
     {"style": "question",  "structure": "twopass", "width": 1280},
-    {"style": "question",  "structure": "single",  "width": 1920},
+    {"style": "question",  "structure": "single",  "width": 960},
 ]
 
 TRANSCRIBE_PROMPT = """You are a transcription engine for a study tutor. Read the image file: {path}
@@ -349,7 +350,7 @@ def claude_call(prompt, model, read=True):
     cmd = ["claude", "-p", "--model", model]
     if read:
         cmd.append("--allowedTools=Read")
-    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=180)
+    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=120)
     return r.stdout.strip() or r.stderr.strip() or "(no response)"
 
 
@@ -367,8 +368,8 @@ def checker(frames_dir):
         raw = ""
         with STATE.lock:
             context = CONTEXT_BLOCK.format(
-                last_on_page=STATE.last_on_page[:1500],
-                last_checks="\n".join(f"- {c}" for c in STATE.last_checks) or "(none yet)",
+                last_on_page=STATE.last_on_page[:1200],
+                last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
             ) if STATE.last_on_page or STATE.last_checks else ""
         try:
             send = shrink_for_model(frames_dir / snap, cfg["width"])
