@@ -225,30 +225,44 @@
     margin-bottom: 8px;
   }
   .check .meta img {
-    height: 56px;
+    height: 40px;
     border-radius: 4px;
     display: block;
   }
-  @media (max-width: 900px) { .check .meta img { height: 44px; } }
-  .check .meta .vis { color: var(--paper); }
-  .check .meta .vis.good { color: var(--leaf); }
-  .check .meta .vis.poor { color: var(--lamp); }
-  .check .onpage {
+  .check .say {
+    font-size: 17px;
+    line-height: 1.5;
+    max-width: 46ch;
+    color: var(--paper);
+  }
+  .check.confirm .say::before { content: "✓ "; color: var(--leaf); }
+  .check.fix .say::before { content: "✎ "; color: var(--lamp); }
+  .check.confirm { border-left: 2px solid var(--leaf); padding-left: 14px; }
+  .check.fix { border-left: 2px solid var(--lamp); padding-left: 14px; }
+  .check .meta { margin-top: 10px; margin-bottom: 0; }
+  details.read summary { color: var(--faded); font-size: 13px; cursor: pointer; }
+  details.read .onpage {
     font-family: Charter, Georgia, serif;
-    font-size: 15.5px;
+    font-size: 14px;
     line-height: 1.55;
     white-space: pre-wrap;
     border-left: 2px solid var(--line);
     padding: 2px 0 2px 14px;
-    margin: 10px 0;
+    margin: 8px 0 0;
     max-width: 60ch;
   }
-  .check .verdict { max-width: 54ch; }
-  .check .verdict::before { content: "✎ "; color: var(--lamp); }
-  .check .visnote { color: var(--faded); font-size: 13.5px; max-width: 54ch; margin-top: 8px; }
+  .check .more { color: var(--faded); font-size: 13.5px; max-width: 50ch; margin-top: 8px; }
   .check .retry { color: var(--lamp); cursor: pointer; background: none; border: none; font-size: 14px; padding: 0; text-decoration: underline; }
-  .check.pending .reading { color: var(--faded); }
-  .check.pending .slow { color: var(--faded); font-size: 13.5px; margin-top: 6px; }
+  .pendingline {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: var(--faded);
+    font-size: 13.5px;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--line);
+  }
+  .pendingline img { height: 40px; border-radius: 4px; }
   details.older { margin-top: 10px; }
   details.older summary {
     cursor: pointer;
@@ -591,24 +605,27 @@
     if (!el("reframe").hidden) el("reframe").textContent = "Reframe: " + note;
   }
   function checkHTML(c) {
-    const vis = c.visibility == null ? "" :
-      `<span class="vis ${c.visibility >= 7 ? "good" : c.visibility <= 4 ? "poor" : ""}">camera view ${c.visibility}/10</span>`;
+    if (c.kind === "idle" || c.kind === "setup") return "";   // the ribbon carries these
+    const parts = (c.check || "").split(/(?<=[.?])\s+/);
+    const say = parts.slice(0, 2).join(" ");
+    const more = parts.slice(2).join(" ");
     const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img src="/snap/${esc(c.snap)}" alt="The snapshot Claude read"></a>` : "";
-    return `<article class="check">
-      <div class="meta">${thumb}<span>${vis}${vis ? " · " : ""}${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}</span></div>
-      ${c.on_page ? `<div class="onpage">${esc(c.on_page)}</div>` : ""}
-      ${c.check ? `<p class="verdict">${esc(c.check)}${c.failed ? ` <button class="retry" data-snap="${esc(c.snap)}">Retry</button>` : ""}</p>` : ""}
-      ${c.visibility_note && (c.visibility == null || c.visibility <= 6)
-        ? `<p class="visnote">${esc(c.visibility_note)}</p>` : ""}
+    return `<article class="check ${c.kind === "confirm" ? "confirm" : "fix"}">
+      <p class="say">${esc(say)}</p>
+      <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}</span>
+        <details class="read"><summary>what I read</summary>
+          <div class="onpage">${esc(c.on_page || "(nothing)")}</div>
+          ${more ? `<p class="more">${esc(more)}</p>` : ""}
+        </details></div>
+      ${c.failed ? `<p class="more">Couldn't finish — <button class="retry" data-snap="${esc(c.snap)}">Retry</button></p>` : ""}
     </article>`;
   }
   function pendingHTML(p) {
-    const slow = Date.now() - p.at > 25000;
-    return `<article class="check pending">
-      <div class="meta"><a href="/snap/${esc(p.id)}" target="_blank" rel="noopener"><img src="/snap/${esc(p.id)}" alt="Snapshot being read"></a>
-      <span class="reading"><span class="lampdot checking"></span>Reading this snapshot…</span></div>
-      ${slow ? `<p class="slow">Still reading — the first check can take a minute.</p>` : ""}
-    </article>`;
+    const s = Math.round((Date.now() - p.at) / 1000);
+    const label = s > 60 ? "Still reading — slow check, the note will land here."
+      : `Reading this snapshot… ${s}s${s > 30 ? " — long one, still going" : ""}`;
+    return `<div class="pendingline"><img src="/snap/${esc(p.id)}" alt="">
+      <span><span class="lampdot checking"></span>${label}</span></div>`;
   }
   function renderFeed(checks) {
     lastChecks = checks;
@@ -617,10 +634,11 @@
     pending = pending.filter(p => !done.has(p.id));
     if (!pending.length) manualPending = false;
     if (!checks.length && !pending.length) return;
-    const items = pending.map(pendingHTML).join("") + checks.slice(0, 3).map(checkHTML).join("");
-    const older = checks.slice(3);
+    const visible = checks.filter(c => c.kind !== "idle" && c.kind !== "setup");
+    const items = pending.map(pendingHTML).join("") + visible.slice(0, 3).map(checkHTML).join("");
+    const older = visible.slice(3);
     el("feed").innerHTML = items + (older.length
-      ? `<details class="older"><summary>${older.length} earlier ${older.length === 1 ? "check" : "checks"}</summary>${older.map(checkHTML).join("")}</details>`
+      ? `<details class="older"><summary>${older.length} earlier ${older.length === 1 ? "note" : "notes"}</summary>${older.map(checkHTML).join("")}</details>`
       : "");
     el("feed").querySelectorAll(".retry").forEach(b =>
       b.addEventListener("click", () => fetch("/retry?snap=" + encodeURIComponent(b.dataset.snap), { method: "POST" })));
