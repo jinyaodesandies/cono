@@ -419,6 +419,8 @@
       <div class="controls">
         <button class="pill" id="checknow" type="button" disabled>Check now</button>
         <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
+        <button class="quiet" id="contrastbtn" type="button" hidden
+          title="Snapshots are contrast-normalized before reading — helps faint pencil">auto contrast: on</button>
         <button class="quiet" id="sessionbtn" type="button" hidden>Record a 10-minute session</button>
         <button class="quiet" id="endbtn" type="button" hidden>End session</button>
         <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
@@ -476,6 +478,7 @@
   let liveCheck = null;       // {id, check, problem} streaming check via SSE
   let liveChat = null;        // {id, text} streaming chat reply via SSE
   let chatWaiting = false;
+  let contrastOn = true;      // auto contrast on snaps (server holds the truth)
 
   // ---------- status line ----------
   const statusText = {
@@ -615,10 +618,41 @@
     return new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
   }
 
+  // Histogram stretch on the snap canvas: find the 0.5% / 99.5% luminance
+  // percentiles and map them to 0..255. A near-no-op on a well-lit page,
+  // a real lift on faint pencil. Returns true if pixels were changed.
+  function stretchContrast(ctx, w, h) {
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4)
+      hist[(d[i] + 2 * d[i + 1] + d[i + 2]) >> 2]++;
+    const clip = (w * h) / 200;                      // 0.5% at each end
+    let lo = 0, acc = 0;
+    for (; lo < 255 && acc + hist[lo] < clip; lo++) acc += hist[lo];
+    let hi = 255; acc = 0;
+    for (; hi > 0 && acc + hist[hi] < clip; hi--) acc += hist[hi];
+    if (hi - lo < 10 || hi - lo > 235) return false; // degenerate, or already full range
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / (hi - lo);
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = lut[d[i]]; d[i + 1] = lut[d[i + 1]]; d[i + 2] = lut[d[i + 2]];
+    }
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
   async function snap(reason, storeOnly) {
-    const blob = await grabBlob();
+    const v = el("video");
+    if (!v.videoWidth) return null;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(v, 0, 0);
+    const enh = contrastOn && stretchContrast(ctx, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
     if (!blob) return null;
-    const url = "/snap?reason=" + encodeURIComponent(reason) + (storeOnly ? "&store=1" : "");
+    const url = "/snap?reason=" + encodeURIComponent(reason) +
+                "&enh=" + (enh ? 1 : 0) + (storeOnly ? "&store=1" : "");
     const resp = await fetch(url, { method: "POST", body: blob }).catch(() => null);
     if (!resp?.ok) return null;
     const { id } = await resp.json();
@@ -906,6 +940,22 @@
     sessionEvent("check_now");
   });
 
+  el("contrastbtn").addEventListener("click", async () => {
+    await fetch("/contrast", { method: "POST", body: JSON.stringify({ on: !contrastOn }) }).catch(() => null);
+    poll.soon();
+  });
+
+  function renderContrast(s) {
+    contrastOn = !!s.contrast;
+    const b = el("contrastbtn");
+    b.hidden = !mode;
+    if (mode !== "live" && contrastOn && !s.pillow) {
+      b.textContent = "auto contrast: on (needs Pillow here — pip install pillow)";
+    } else {
+      b.textContent = "auto contrast: " + (contrastOn ? "on" : "off");
+    }
+  }
+
   // ---------- SSE: streamed text ----------
   function startEvents() {
     const es = new EventSource("/events");
@@ -1134,6 +1184,7 @@
     renderRibbon(s.checks || []);
     renderDialogue();
     renderHistory(s.checks || []);
+    renderContrast(s);
     if (session && !session.framingShown && s.checks.length > session.checksAtStart) {
       const first = s.checks[0];            // first check since recording started
       if (first && first.visibility != null) {

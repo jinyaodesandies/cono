@@ -49,6 +49,7 @@ def main():
         for dim, key in (("style", lambda c: c.get("config", {}).get("style", c.get("style", "?"))),
                          ("structure", lambda c: c.get("config", {}).get("structure", "?")),
                          ("width", lambda c: c.get("config", {}).get("width", "?")),
+                         ("contrast", lambda c: c.get("contrast", "?")),
                          ("reason", lambda c: c.get("reason", "?"))):
             groups = defaultdict(list)
             for c in checks:

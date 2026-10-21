@@ -72,6 +72,7 @@ Other flags:
 cono-check --model opus          # pick the model (default: sonnet)
 cono-check --replay DIR          # replay any recorded session directory
 cono-check --port 9000           # serve somewhere else (default: 8764)
+cono-check --no-contrast         # don't contrast-normalize snaps before reading
 cono-check --no-open             # don't open the browser automatically
 ```
 
@@ -93,6 +94,19 @@ green cells the model could read, red cells where something's there but
 too blurry, small, or cut off to read, dark cells blank paper. This is
 the framing indicator — a red band means reposition that part of the
 page. The camera n/10 chip next to it links to the exact frame read.
+
+Feeding the map: every snap is **contrast-normalized** before the model
+reads it — a histogram stretch that's a near-no-op on a well-lit page
+and a real lift on faint pencil in dim classroom light. Browser-mode
+snaps are stretched on the canvas before upload; Desk View and replay
+frames are stretched in place by the server when Pillow is installed
+(`pip install pillow` — optional, everything works without it, snaps
+just pass through unchanged). The stored snapshot, the thumbnail on
+each note, and what the model read are always the same pixels, and each
+check records which treatment its snap got (`canvas` / `pillow` /
+`skip` / `off`) so session scores stay comparable. Turn it off with the
+"auto contrast" button under the camera view or start with
+`--no-contrast`.
 
 **Dialogue.** Every note lands in a chat thread anchored to the current
 problem, and you can type back — ask about the question, push back on a
@@ -186,7 +200,8 @@ stops the device entirely.
 The page downsizes each video frame to 160×120 and measures how much
 changed since the last look, four times a second. Change above 20% means
 you're writing; once it drops below 10% the page has settled, and the
-frame goes to Claude inline (base64, downscaled to 960 px) through
+frame — contrast-normalized unless you turned that off — goes to Claude
+inline (base64, downscaled to 960 px) through
 `claude -p --input-format stream-json --output-format stream-json
 --include-partial-messages`. The reply streams back in fixed field
 order — visibility, what you're working on, the problem card, a faithful

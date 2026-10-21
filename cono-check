@@ -26,8 +26,17 @@ Usage:
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
   cono-check --port 9000         # serve somewhere else (default: 8764)
+  cono-check --no-contrast       # don't contrast-normalize snaps before reading
   cono-check --no-open           # don't open the browser automatically
 Ctrl-C to stop.
+
+Snaps get automatic contrast normalization (histogram stretch) before the
+model reads them - a near-no-op on well-lit pages, a real lift on faint
+pencil. Browser snaps are stretched on the canvas before upload; deskview/
+replay frames are stretched in place server-side when Pillow is installed
+(optional - everything works without it). The stored snap, the thumbnail,
+and what the model reads are always the same pixels. Toggle live with the
+"auto contrast" button under the camera, or start with --no-contrast.
 """
 import base64, csv, json, os, queue, re, shutil, signal, struct, subprocess, sys, threading, time
 from datetime import datetime
@@ -39,6 +48,14 @@ try:
     sys.stdout.reconfigure(line_buffering=True)   # latency lines show up when piped
 except Exception:
     pass
+
+try:
+    # optional, never required: server-side contrast normalization for frames
+    # that don't pass through the browser canvas (deskview, replay, demo)
+    from PIL import Image as _PILImage, ImageOps as _PILImageOps
+    PIL_OK = True
+except ImportError:
+    PIL_OK = False
 
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.html"
@@ -79,7 +96,7 @@ VISIBILITY: n/10 - one short line: what the camera sees; which edges are cut off
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
 PROBLEM: the problem the student is currently on, exactly as: <the worksheet's own printed label> | <that question restated in at most 12 words> | <the student's progress on it in at most 8 words, or "not started">. If the page has no labeled problems, invent a short stable label from the content.
 ON PAGE: the student's handwritten work, line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Do NOT copy printed question text - give each item's printed label, then the handwriting under it; skip items with no handwriting. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
-TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, or recount sig figs - BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok"). Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error. Write "none" if no counting is involved.
+TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, or recount sig figs - BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok") - the verdict must follow from the two numbers you just wrote: if they differ, it is OFF, no matter what you expected. Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error. Write "none" if no counting is involved.
 CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed.
 GRID: a readability map of the sheet of paper itself (ignore the desk around it): exactly 6 lines of 4 digits, each digit one cell of the page in reading order, top-left cell first. 2 = ink or print there and readable, 1 = something written or printed there but too blurry, small, cut off, or glared to read reliably, 0 = blank paper. If no page is in frame, give 6 lines of 0000.
@@ -179,6 +196,8 @@ class State:
         self.next_from = None           # label the student pressed Next on (consumed by next check)
         self.latest_img = None          # newest stored image filename (chat reads this)
         self.msg_id = 0                 # ids for checks + chat messages (SSE correlation)
+        self.contrast = True            # auto contrast normalization on snaps
+        self.snap_enh = {}              # live mode: snap name -> client applied contrast
 
     def thread(self):
         label = (self.problem or {}).get("label")
@@ -199,6 +218,7 @@ class State:
                 },
                 "thread": self.thread()[-40:],
                 "asks": self.asks.get(label, 0),
+                "contrast": self.contrast, "pillow": PIL_OK,
             }
 
 
@@ -452,6 +472,33 @@ def parse_report(text, partial=False):
     return out
 
 
+ENHANCED = set()                        # snap paths already contrast-stretched
+
+
+def enhance_snap(path):
+    """Contrast-normalize a stored snap IN PLACE (histogram stretch, clipping
+    1% at each end) so the thumbnail, the session copy, and what the model
+    reads are the same pixels. Near-no-op on well-lit pages, a real lift on
+    faint pencil. Pillow-if-present only — without it this is a clean skip
+    (live-mode snaps are stretched in the browser canvas instead and never
+    come through here). Returns True if the file was changed."""
+    if not PIL_OK:
+        return False
+    with STATE.lock:
+        if path in ENHANCED:
+            return True
+        ENHANCED.add(path)
+    try:
+        im = _PILImage.open(path)
+        im = _PILImageOps.exif_transpose(im)
+        out = _PILImageOps.autocontrast(im.convert("RGB"), cutoff=1)
+        out.save(path, "JPEG", quality=88)
+        return True
+    except Exception as e:
+        print(f"contrast skip ({Path(path).name}): {e}")
+        return False
+
+
 def shrink_for_model(path, width=1280):
     """What the model reads is a downscaled copy (cheaper tokens, no measured
     quality loss in experiments/run1); the original stays on disk as ground
@@ -627,6 +674,15 @@ def checker(frames_dir):
                             problem=p["problem"], visibility=p["visibility"],
                             working_on=p["working_on"])
         try:
+            with STATE.lock:
+                contrast_on, mode = STATE.contrast, STATE.mode
+                client_enh = STATE.snap_enh.get(snap, False)
+            if not contrast_on:
+                entry["contrast"] = "off"
+            elif mode == "live":        # browser stretched it on the canvas pre-upload
+                entry["contrast"] = "canvas" if client_enh else "skip"
+            else:                       # deskview/replay: stretch the stored file itself
+                entry["contrast"] = "pillow" if enhance_snap(frames_dir / snap) else "skip"
             send = shrink_for_model(frames_dir / snap, cfg["width"])
             prompt = PROMPT.format(context=context,
                                    check_style=CHECK_STYLES[cfg["style"]],
@@ -662,6 +718,7 @@ def checker(frames_dir):
             record = {"t": t, "snap": snap, "reason": reason, "config": cfg,
                       "style": cfg["style"], "latency_ms": latency,
                       "first_token_ms": first_ms,
+                      "contrast": entry.get("contrast", "off"),
                       "problem": (entry.get("problem") or {}).get("label", ""),
                       "visibility": entry.get("visibility"),
                       "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
@@ -911,9 +968,11 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.snap_n += 1
                 name = f"snap-{STATE.snap_n:04d}.jpg"
                 STATE.latest_img = name
+                STATE.snap_enh[name] = q.get("enh", ["0"])[0] == "1"
             (self.frames_dir / name).write_bytes(body)
             if SESSION.active:
-                SESSION.event("snap_sent", id=name, reason=q.get("reason", [""])[0])
+                SESSION.event("snap_sent", id=name, reason=q.get("reason", [""])[0],
+                              enh=q.get("enh", ["0"])[0] == "1")
             if q.get("store", ["0"])[0] != "1":      # store=1: freshen only (for chat)
                 queue_check(name, q.get("reason", ["page settled"])[0])
             self.send(200, json.dumps({"id": name}).encode(), "application/json")
@@ -938,6 +997,13 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=run_chat, args=(cid, text, anchor, self.frames_dir),
                              daemon=True).start()
             self.send(200, json.dumps({"id": cid}).encode(), "application/json")
+        elif url.path == "/contrast":                # toggle auto contrast on snaps
+            data = json.loads(self.body() or b"{}")
+            with STATE.lock:
+                STATE.contrast = bool(data.get("on", True))
+                on = STATE.contrast
+            SESSION.event("contrast_set", on=on)
+            self.send(200, json.dumps({"on": on}).encode(), "application/json")
         elif url.path == "/next":                    # problem card: Next button
             with STATE.lock:
                 label = (STATE.problem or {}).get("label") or "the current problem"
@@ -1088,7 +1154,10 @@ def main():
         doctor()
     model, port, replay_dir = "sonnet", 8764, None
     open_browser = "--no-open" not in args
-    args = [a for a in args if a != "--no-open"]
+    if "--no-contrast" in args:
+        with STATE.lock:
+            STATE.contrast = False
+    args = [a for a in args if a not in ("--no-open", "--no-contrast")]
     for flag, cast in (("--model", str), ("--port", int), ("--replay", str)):
         if flag in args:
             i = args.index(flag)
