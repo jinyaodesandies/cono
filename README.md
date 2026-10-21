@@ -21,7 +21,9 @@ git clone https://github.com/jinyaodesandies/cono-check && cono-check/cono-check
 
 Your browser opens to the session; within a minute the first check
 appears in the margin, and it should point at the factoring error
-without giving away the fix.
+without giving away the fix. There's a chemistry version too —
+`cono-check demo chem` replays a stoichiometry page with a mis-balanced
+equation and a significant-figures slip.
 
 You need macOS, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
 installed and logged in (`claude` does the reading — no API key setup).
@@ -98,7 +100,15 @@ or shown to the AI. Frames are compared locally, and only when your page
 has changed and settled does one snapshot go to the local server, which
 reads it through your own `claude` login — never more than one every
 5 seconds, and typically just a few per problem. Every check in the
-margin shows a thumbnail of exactly the frame that was read. Snapshots are kept on your machine in
+margin shows a thumbnail of exactly the frame that was read.
+
+Checks work across STEM subjects — math derivations, chemistry
+(balancing, units, significant figures, subscripts read as written),
+and biology worksheets — and they remember the page: feedback covers
+only what's new since the last look, in at most two sentences, using
+the worksheet's own question labels. Press "Check now" twice on the
+same problem and the hint escalates: guiding question first, then a
+worked step, then the answer with an offered explain-back. Snapshots are kept on your machine in
 `~/deskcap/check-<timestamp>/`. Pause camera stops the device entirely.
 
 ## How it works

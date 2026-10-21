@@ -62,10 +62,10 @@ PROMPT = """You are Cono, an AI study tutor watching a student's paper through a
 {context}
 Respond in EXACTLY this plain-text format, no markdown:
 
-VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts, fraction bars) are readable; note blur or glare.
+VISIBILITY: n/10 - one line: what the camera sees; whether a page is in frame and which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
-ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Write (?) for any token you cannot read. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
-CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. If there is no new student work, CHECK must be at most one short line. If nothing is readable, give one concrete tip to fix the framing. {escalation}
+ON PAGE: transcribe line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve scientific notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
+CHECK: {check_style} Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. If there is no new student work, CHECK must be at most one short line. For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed."""
 
 CONTEXT_BLOCK = """
@@ -662,7 +662,7 @@ def main():
             del args[i:i + 2]
     deskview = "deskview" in args or "deskcap" in args
     if "demo" in args:
-        replay_dir = str(SAMPLE)
+        replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
     if "session" in args:
         with STATE.lock:
             STATE.session_panel = True
