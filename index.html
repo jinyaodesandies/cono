@@ -307,6 +307,27 @@
   .maptime { color: var(--faded); font-size: 12px; }
   .reframe { color: var(--lamp); font-size: 13.5px; }
 
+  /* check-stage trace (test feature) */
+  .stagebox { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; }
+  .stagebox .testmark {
+    font-size: 10px; font-weight: 400; letter-spacing: normal; text-transform: lowercase;
+    border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px;
+    color: var(--faded); margin-left: 4px; vertical-align: 1px;
+  }
+  .stagestrip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .stagechip {
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: rgba(242, 237, 227, 0.05);
+    color: var(--faded);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .stagechip.hit { background: rgba(147, 181, 120, 0.16); color: var(--leaf); }
+  .stagechip.cur { background: rgba(224, 166, 46, 0.18); color: var(--lamp); animation: breathe 1.2s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .stagechip.cur { animation: none; } }
+
   details.older summary { cursor: pointer; color: var(--faded); font-size: 13.5px; padding: 4px 0; }
   .hist { border-top: 1px solid var(--line); padding: 10px 0; }
   .hist .meta { display: flex; align-items: center; gap: 10px; color: var(--faded); font-size: 12.5px; margin-bottom: 4px; }
@@ -421,6 +442,8 @@
         <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
         <button class="quiet" id="contrastbtn" type="button" hidden
           title="Snapshots are contrast-normalized before reading — helps faint pencil">auto contrast: on</button>
+        <button class="quiet" id="stagebtn" type="button" hidden
+          title="Test feature: live trace of which stage of the reading a check is in">stage trace: on</button>
         <button class="quiet" id="sessionbtn" type="button" hidden>Record a 10-minute session</button>
         <button class="quiet" id="endbtn" type="button" hidden>End session</button>
         <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
@@ -441,6 +464,14 @@
           Click a cell to ask about that spot.<br><span class="maptime" id="maptime"></span></span>
       </div>
     </div>
+    <div class="stagebox" id="stagebox" hidden>
+      <div class="maphead">
+        <h3>Check stages <span class="testmark">test</span></h3>
+        <span class="maptime" id="stagetime"></span>
+      </div>
+      <div class="stagestrip" id="stagestrip"></div>
+    </div>
+
     <div class="reframe" id="reframe" hidden></div>
 
     <details class="older" id="historybox" hidden>
@@ -479,6 +510,8 @@
   let liveChat = null;        // {id, text} streaming chat reply via SSE
   let chatWaiting = false;
   let contrastOn = true;      // auto contrast on snaps (server holds the truth)
+  let stageTrace = localStorage.getItem("cono-stagetrace") !== "off";
+  let stageRun = null;        // test feature: {kind, id, stages:[{stage,ms}], start, done}
 
   // ---------- status line ----------
   const statusText = {
@@ -954,7 +987,59 @@
     } else {
       b.textContent = "auto contrast: " + (contrastOn ? "on" : "off");
     }
+    el("stagebtn").hidden = !mode;
   }
+
+  // ---------- check-stage trace (test feature): where does the time go? ----
+  // Every chip is a real pipeline event pushed by the server — contrast done,
+  // request sent, first streamed token, each reply section appearing — never
+  // a timer animation. The elapsed clock is the only thing that ticks.
+  const STAGE_ORDER = {
+    check: ["contrast", "sent", "first word", "visibility", "working on", "problem",
+            "on page", "tally", "check", "kind", "grid", "equations", "done"],
+    chat:  ["crop", "sent", "first word", "done"],
+  };
+  const STAGE_LABEL = {
+    contrast: "contrast", sent: "sent", "first word": "model", visibility: "vis",
+    "working on": "work", problem: "prob", "on page": "page", tally: "tally",
+    check: "check", kind: "kind", grid: "grid", equations: "eqns",
+    done: "done", crop: "crop",
+  };
+
+  function renderStages() {
+    const box = el("stagebox");
+    if (!stageTrace) { box.hidden = true; return; }
+    let run = stageRun;
+    if (!run) {                        // page loaded between checks: show the last one
+      const last = (lastState?.checks || []).find(c => c.stages && c.stages.length);
+      if (last) run = { kind: "check", stages: last.stages, done: true, start: null };
+    }
+    if (!run) { box.hidden = true; return; }
+    box.hidden = false;
+    const byName = {};
+    run.stages.forEach(s => { byName[s.stage] = s.ms; });
+    const order = STAGE_ORDER[run.kind] || STAGE_ORDER.check;
+    const chips = order.filter(n => n in byName || n !== "crop");
+    const lastHit = run.stages.length ? run.stages[run.stages.length - 1].stage : null;
+    el("stagestrip").innerHTML = chips.map(n => {
+      const hit = n in byName;
+      const cur = !run.done && n === lastHit;
+      return `<span class="stagechip${hit ? " hit" : ""}${cur ? " cur" : ""}">` +
+             `${esc(STAGE_LABEL[n] || n)}${hit ? " " + (byName[n] / 1000).toFixed(1) : ""}</span>`;
+    }).join("");
+    const total = byName.done != null ? byName.done : run.start ? Date.now() - run.start : null;
+    el("stagetime").textContent = total == null ? ""
+      : (run.done ? "took " : "") + (total / 1000).toFixed(1) + "s";
+  }
+  setInterval(() => { if (stageRun && !stageRun.done) renderStages(); }, 250);
+
+  el("stagebtn").addEventListener("click", () => {
+    stageTrace = !stageTrace;
+    localStorage.setItem("cono-stagetrace", stageTrace ? "on" : "off");
+    el("stagebtn").textContent = "stage trace: " + (stageTrace ? "on" : "off");
+    renderStages();
+  });
+  el("stagebtn").textContent = "stage trace: " + (stageTrace ? "on" : "off");
 
   // ---------- SSE: streamed text ----------
   function startEvents() {
@@ -973,10 +1058,23 @@
         renderDialogue();
       } else if (ev.type === "check_start") {
         liveCheck = { id: ev.id, check: "" };
+        stageRun = { kind: "check", id: ev.id, stages: [], start: Date.now(), done: false };
         renderDialogue();
+        renderStages();
       } else if (ev.type === "check_done") {
         liveCheck = null;
+        if (stageRun && stageRun.kind === "check" && stageRun.id === ev.id) stageRun.done = true;
+        renderStages();
         poll.soon();
+      } else if (ev.type === "chat_start") {
+        stageRun = { kind: "chat", id: ev.id, stages: [], start: Date.now(), done: false };
+        renderStages();
+      } else if (ev.type === "stage") {
+        if (stageRun && stageRun.id === ev.id && stageRun.kind === ev.kind) {
+          stageRun.stages.push({ stage: ev.stage, ms: ev.ms });
+          if (ev.stage === "done") stageRun.done = true;
+          renderStages();
+        }
       } else if (ev.type === "chat_partial") {
         chatWaiting = false;
         liveChat = ev;
@@ -984,6 +1082,8 @@
       } else if (ev.type === "chat_done") {
         liveChat = null;
         chatWaiting = false;
+        if (stageRun && stageRun.kind === "chat" && stageRun.id === ev.id) stageRun.done = true;
+        renderStages();
         poll.soon();
       }
     };
@@ -1185,6 +1285,7 @@
     renderDialogue();
     renderHistory(s.checks || []);
     renderContrast(s);
+    renderStages();
     if (session && !session.framingShown && s.checks.length > session.checksAtStart) {
       const first = s.checks[0];            // first check since recording started
       if (first && first.visibility != null) {

@@ -37,6 +37,13 @@ replay frames are stretched in place server-side when Pillow is installed
 (optional - everything works without it). The stored snap, the thumbnail,
 and what the model reads are always the same pixels. Toggle live with the
 "auto contrast" button under the camera, or start with --no-contrast.
+
+Test feature: a "check stages" strip in the side column traces each
+in-flight check/chat through the real pipeline stages (contrast, sent,
+first streamed word, then each reply section as it arrives) with elapsed
+time - driven by server events, never a timer. Toggle it with the
+"stage trace" button; per-stage ms is logged into session bundles and
+tabled by tools/score-session.py.
 """
 import base64, csv, json, os, queue, re, shutil, signal, struct, subprocess, sys, threading, time
 from datetime import datetime
@@ -90,7 +97,7 @@ STUCK_S = int(os.environ.get("CONO_STUCK_S", 120))   # quiet this long after wri
 
 PROMPT = """You are Cono, an AI study tutor watching a student's page as it lies on their desk, through a top-down camera. The attached image is the latest capture of the page.
 {context}
-Respond in EXACTLY this plain-text format, no markdown, fields in this exact order:
+Respond in EXACTLY this plain-text format, no markdown, fields in this exact order. Never respond with anything else: no meta-commentary about the image, the prompt, or whether this looks like a test or sample - a blank or odd page still gets the format below.
 
 VISIBILITY: n/10 - one short line: what the camera sees; which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units, exact digits) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
@@ -250,6 +257,40 @@ class Events:
 
 
 EVENTS = Events()
+
+STAGE_FIELDS = ["VISIBILITY", "WORKING ON", "PROBLEM", "ON PAGE", "TALLY",
+                "CHECK", "KIND", "GRID", "EQUATIONS"]
+
+
+class Stages:
+    """Per-check/chat stage timestamps — a test feature: Yao watches where
+    the time goes. Every transition is a real pipeline event (never a timer):
+    contrast done, request sent, first streamed token, each reply-contract
+    section appearing in the stream, done. Emitted live over SSE and logged
+    into session records so score-session can show where latency lives."""
+
+    def __init__(self, cid, kind):
+        self.cid, self.kind = cid, kind
+        self.t0 = time.time()
+        self.list = []                  # [{"stage": name, "ms": since-start}]
+        self.seen = set()
+        self.pending = list(STAGE_FIELDS)
+
+    def hit(self, name):
+        if name in self.seen:
+            return
+        self.seen.add(name)
+        ms = int((time.time() - self.t0) * 1000)
+        self.list.append({"stage": name, "ms": ms})
+        EVENTS.emit(type="stage", kind=self.kind, id=self.cid, stage=name, ms=ms)
+
+    def scan(self, text):
+        """Called per stream delta: mark reply sections as their headers appear."""
+        self.hit("first word")
+        for f in list(self.pending):
+            if re.search(rf"^\s*{f}\s*:", text, re.M | re.I):
+                self.pending.remove(f)
+                self.hit(f.lower())
 
 
 STATE = State()
@@ -655,6 +696,7 @@ def checker(frames_dir):
         entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap,
                  "reason": reason, "id": cid}
         EVENTS.emit(type="check_start", id=cid, snap=snap, reason=reason)
+        st = Stages(cid, "check")
         t0 = time.time()
         raw, first = "", None
         extra = ESCALATION if reason == "asked" else \
@@ -663,6 +705,7 @@ def checker(frames_dir):
         last_push = [0.0]
 
         def push(text):                 # stream partial CHECK text to the browser
+            st.scan(text)               # stage strip: mark sections as they appear
             now = time.time()
             done = "\nKIND" in text
             if not done and now - last_push[0] < 0.12:
@@ -683,7 +726,9 @@ def checker(frames_dir):
                 entry["contrast"] = "canvas" if client_enh else "skip"
             else:                       # deskview/replay: stretch the stored file itself
                 entry["contrast"] = "pillow" if enhance_snap(frames_dir / snap) else "skip"
+            st.hit("contrast")
             send = shrink_for_model(frames_dir / snap, cfg["width"])
+            st.hit("sent")
             prompt = PROMPT.format(context=context,
                                    check_style=CHECK_STYLES[cfg["style"]],
                                    no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
@@ -706,6 +751,8 @@ def checker(frames_dir):
                          check="Couldn't read this snapshot. Check that `claude` runs "
                                "in your terminal, then retry.")
             print(f"check failed: {e}")
+        st.hit("done")
+        entry["stages"] = st.list
         latency = int((time.time() - t0) * 1000)
         first_ms = int(first * 1000) if first else None
         print(f"check {snap} ({reason}): first text "
@@ -719,6 +766,7 @@ def checker(frames_dir):
                       "style": cfg["style"], "latency_ms": latency,
                       "first_token_ms": first_ms,
                       "contrast": entry.get("contrast", "off"),
+                      "stages": entry.get("stages", []),
                       "problem": (entry.get("problem") or {}).get("label", ""),
                       "visibility": entry.get("visibility"),
                       "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
@@ -753,14 +801,17 @@ def run_chat(cid, text, anchor, frames_dir):
         img = STATE.latest_img or STATE.frame
     t0 = time.time()
     EVENTS.emit(type="chat_start", id=cid)
+    st = Stages(cid, "chat")
 
     def push(t):
+        st.hit("first word")
         EVENTS.emit(type="chat_partial", id=cid, text=t)
     anchor_note, blocks = "", []
     try:
         if img and (frames_dir / img).exists():
             if anchor:
                 crop = crop_for_anchor(frames_dir / img, *anchor)
+                st.hit("crop")
                 anchor_note = ANCHOR_NOTE.format(
                     region=anchor_region(*anchor),
                     crop=" (a full-resolution close-up of that spot is the second image)"
@@ -772,6 +823,7 @@ def run_chat(cid, text, anchor, frames_dir):
         prompt = CHAT_PROMPT.format(anchor_note=anchor_note, problem=problem,
                                     last_on_page=on_page, last_checks=notes,
                                     thread=thread, asks=asks, text=text)
+        st.hit("sent")
         raw, first = claude_stream([{"type": "text", "text": prompt}] + blocks,
                                    STATE.model, on_text=push)
         reply = raw.strip()
@@ -779,6 +831,7 @@ def run_chat(cid, text, anchor, frames_dir):
         reply = "Couldn't answer that one — check that `claude` runs in your terminal, then ask again."
         first = None
         print(f"chat failed: {e}")
+    st.hit("done")
     latency = int((time.time() - t0) * 1000)
     first_ms = int(first * 1000) if first else None
     with STATE.lock:
@@ -787,7 +840,8 @@ def run_chat(cid, text, anchor, frames_dir):
              "kind": "chat", "snap": img, "id": cid})
         STATE.last_checks = (STATE.last_checks + [reply])[-3:]
     SESSION.event("chat_done", text=text, anchor=anchor, reply=reply,
-                  asks=asks, latency_ms=latency, first_token_ms=first_ms)
+                  asks=asks, latency_ms=latency, first_token_ms=first_ms,
+                  stages=st.list)
     EVENTS.emit(type="chat_done", id=cid)
     print(f"chat ({label}, ask #{asks}): first text "
           f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")

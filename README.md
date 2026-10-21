@@ -139,6 +139,18 @@ feedback must agree with — and frames are downscaled to 960 px for
 reading while originals stay on disk. Automatic snaps still never come
 faster than one per 5 s.
 
+**Watching where the time goes** (test feature): a small "check stages"
+strip in the side column traces each in-flight check or chat reply
+through the real stages of the pipeline — contrast, request sent, first
+word from the model, then each section of the reply as it streams in
+(visibility → working on → problem → page → tally → check → kind → grid
+→ equations) — with a live elapsed clock. Every chip lights on a real
+server event, never a timer animation, so during head-to-head sessions
+you can see exactly which stage is eating the seconds. Hide or show it
+with the "stage trace" button; the per-stage timestamps are logged into
+every session record and `tools/score-session.py` prints a stage-timing
+table from them.
+
 ## Record a 10-minute session
 
 ```bash
