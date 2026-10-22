@@ -81,13 +81,23 @@ cono-check --no-open             # don't open the browser automatically
 **Problem card.** The question you're currently on, extracted from the
 worksheet and pinned at the top with Cono's read of your progress on it.
 The **Next** button tells Cono you're moving on: it identifies the next
-problem on the page and gives you a one-line orientation for it.
+problem on the page, gives you a one-line orientation for it, and
+**pins the card there** (marked ⦿) — later re-reads of the page can't
+snap it back to the problem you left; the pin dissolves on its own once
+your handwriting genuinely moves to another problem.
 
-**Relations.** The 1–3 equations the current problem runs on — taken
-from your page when you've written them, otherwise the standard relation
-the problem needs — typeset in chem shorthand (H₂O, SO₄²⁻, →, ⇌) with a
-highlighted `?` in place of each quantity you haven't found yet. The
-"what am I even solving" scaffold.
+**Relations.** All the equations the current problem runs on (up to
+four) — taken from your page when you've written them, otherwise the
+standard relations the problem needs — typeset in chem shorthand (H₂O,
+SO₄²⁻, →, ⇌) with a highlighted `?` in place of each quantity you
+haven't found yet. The "what am I even solving" scaffold. The same
+typesetting applies everywhere math appears — the problem card, Cono's
+notes, the transcription — and anything it can't recognize passes
+through as plain text rather than being dropped.
+
+**On the page.** Cono's latest transcription of your handwriting, line
+by line, right in the twin — your page, reborn as text it can talk
+about.
 
 **Readability map.** A page-shaped grid, updated with every snapshot:
 green cells the model could read, red cells where something's there but
@@ -110,12 +120,13 @@ check records which treatment its snap got (`canvas` / `pillow` /
 
 **Dialogue.** Every note lands in a chat thread anchored to the current
 problem, and you can type back — ask about the question, push back on a
-note, or press **explain more**. You can also *point with your pen*:
-click a spot on the camera image (or a readability-map cell) and ask
-"what about this?" — the question is anchored to that spot, and the
-model gets a full-resolution close-up of it. Earlier problems keep their
-own threads; "earlier notes" below the map holds every check with the
-exact snapshot and transcription behind it.
+note, or press **explain more**. And the twin itself is the pointing
+surface: click a transcribed line, a relation, the problem card, or a
+readability-map cell, then ask "what about this?" — the question is
+anchored to that exact thing (the model gets the element's own text,
+or, for map cells, the page region plus a full-resolution close-up).
+Earlier problems keep their own threads; "earlier notes" below the map
+holds every check with the exact snapshot and transcription behind it.
 
 **The ladder.** Cono never refuses and never blurts. Unprompted checks
 hint first: a guiding question that implies where the error is. Ask

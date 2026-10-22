@@ -13,9 +13,14 @@ Claude Code login, no API key), which streams back, fast fields first:
   equations         the relations the problem runs on, ? for unknowns
   on your page      faithful transcription, student's errors preserved
 
-The twin is the product: problem card + dialogue (typed chat, point with
-your pen by clicking the image), equations, readability map. Replies
-stream — first text in ~1-3 s.
+The twin is the product: problem card + dialogue, equations, the
+transcribed page, readability map. The twin is also the pointing
+surface: click a transcribed line, a relation, the problem card, or a
+readability cell to anchor a typed question to that exact thing. The
+Next button advances the problem card and pins it there until your
+writing genuinely moves on. Chem/math is typeset (H2O-style subscripts,
+charges, arrows) everywhere it appears. Replies stream — first text in
+~1-3 s.
 
 Usage:
   cono-check                     # the Desk View camera (top-down on your desk) - the default
@@ -107,11 +112,11 @@ TALLY: one line of private working in shorthand that your check depends on - rec
 CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed.
 GRID: a readability map of the sheet of paper itself (ignore the desk around it): exactly 6 lines of 4 digits, each digit one cell of the page in reading order, top-left cell first. 2 = ink or print there and readable, 1 = something written or printed there but too blurry, small, cut off, or glared to read reliably, 0 = blank paper. If no page is in frame, give 6 lines of 0000.
-EQUATIONS: the 1-3 relations that govern the problem in PROBLEM - taken from the page if the student wrote them, otherwise the standard relation the problem needs. One per line, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Write "none" if none apply."""
+EQUATIONS: ALL the relations that govern the problem in PROBLEM, up to 4 - taken from the page if the student wrote them, otherwise the standard relations the problem needs. One complete relation per line, never truncated, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Never reveal a value or coefficient the student still has to find or fix - put ? in its place (their balancing wrong -> write ?O_2, never the corrected coefficient). Write "none" if none apply."""
 
 CONTEXT_BLOCK = """
 Context from your earlier looks (for WORKING ON, PROBLEM and CHECK only - always transcribe from the image, not from this):
-Current problem: {problem}
+Current problem: {problem}{pin_note}
 Earlier reading of the student's handwriting:
 {last_on_page}
 Your recent notes to the student (do not repeat these):
@@ -138,7 +143,10 @@ ESCALATION = """The student pressed "check now" themselves. If your recent notes
 
 STUCK_NOTE = """The student has written nothing for a while and may be stuck. This check is the one exception to the no-new-work rule: even though nothing new is on the page, give ONE gentle orientation nudge about the problem they appear stopped on - restate what it asks in plain words, or name the first thing to decide, building on their last written step. Do not list tasks and do not mention the pause itself. Set KIND to "fix"."""
 
-NEXT_NOTE = """The student pressed "Next" - they are moving on from {label}. PROBLEM must name the next problem on the page after it. Make CHECK one short orientation line for that next problem - what it asks or the first thing to decide. Set KIND to "confirm" if the finished problem's work looks complete and right, otherwise "fix" pointing once at what is unresolved there."""
+NEXT_NOTE = """The student pressed "Next" - they are moving on from {label}. PROBLEM must name the next problem printed on the page after it, even if nothing is written there yet. Make CHECK one short orientation line for that next problem - what it asks or the first thing to decide. Set KIND to "confirm" if the finished problem's work looks complete and right, otherwise "fix" pointing once at what is unresolved there."""
+
+PIN_NOTE = """
+The student pressed Next and manually advanced to {pin}: keep PROBLEM on {pin} (or a later problem), even though the page's most recent work is on an earlier one - only name an earlier problem again if brand-new handwriting has just appeared on it."""
 
 STYLE_ORDER = ["question", "principle", "point", "next-step"]
 
@@ -171,8 +179,19 @@ Ladder policy - never refuse help, never hand over the answer early. Counting th
 
 Student: {text}"""
 
-ANCHOR_NOTE = """
-The student is pointing (pen or cursor) at the {region} of the page{crop}. Treat the message as being about what is written right there, and say what you see at that spot if they ask."""
+# pointing lives in the digital twin: the student clicks a transcribed line,
+# a relation, the problem card, or a readability-map cell, and the anchor
+# carries that element's own text (or page region) to the model.
+ANCHOR_NOTES = {
+    "region": """
+The student is pointing at the {text} of the page{crop}. Treat the message as being about what is written right there, and say what you see at that spot if they ask.""",
+    "line": """
+The student is pointing at this line of their handwriting (from your own transcription): "{text}". Treat the message as being about exactly that line.""",
+    "equation": """
+The student is pointing at this relation shown in their twin panel: "{text}". Treat the message as being about exactly that relation.""",
+    "problem": """
+The student is pointing at the pinned problem card: "{text}". Treat the message as being about that problem as a whole.""",
+}
 
 
 class State:
@@ -194,6 +213,8 @@ class State:
         self.checking_n = 0             # checks in flight (two workers)
         # --- the digital twin ---
         self.problem = None             # {"label","question","progress"} current problem card
+        self.pinned_label = None        # problem the student advanced to with Next (sticks)
+        self.pinned_from = None         # ...and the one they left (reject snap-backs to it)
         self.equations = []             # [{"eq","name"}] relations for the current problem
         self.grid = []                  # readability map: list of digit-strings, rows of the page
         self.grid_snap = None           # the snap the grid describes
@@ -221,7 +242,8 @@ class State:
                 "twin": {
                     "problem": self.problem, "equations": self.equations,
                     "grid": self.grid, "grid_snap": self.grid_snap,
-                    "grid_time": self.grid_time,
+                    "grid_time": self.grid_time, "on_page": self.last_on_page,
+                    "pinned": self.pinned_label,
                 },
                 "thread": self.thread()[-40:],
                 "asks": self.asks.get(label, 0),
@@ -423,8 +445,13 @@ PENDING_LOCK = threading.Lock()
 PENDING_EVENT = threading.Event()
 
 
+USER_REASONS = ("asked", "next", "retry")   # student pressed something: never evicted
+
+
 def queue_check(snap_name, reason):
     with PENDING_LOCK:
+        if PENDING and PENDING[0][1] in USER_REASONS and reason not in USER_REASONS:
+            return                      # an automatic snap never evicts a user request
         PENDING[:] = [(snap_name, reason)]
     PENDING_EVENT.set()
 
@@ -494,7 +521,7 @@ def parse_report(text, partial=False):
             if re.fullmatch(r"[012]{2,8}", row) and len(out["grid"]) < 8:
                 out["grid"].append(row)
         elif field == "EQUATIONS":
-            if line.strip() and line.strip().lower() != "none" and len(out["equations"]) < 4:
+            if line.strip() and line.strip().lower() != "none" and len(out["equations"]) < 6:
                 eq, _, name = line.partition("::")
                 if eq.strip():
                     out["equations"].append({"eq": eq.strip(), "name": name.strip()})
@@ -649,13 +676,14 @@ def build_context():
         return ""
     return CONTEXT_BLOCK.format(
         problem=fmt_problem(STATE.problem),
+        pin_note=PIN_NOTE.format(pin=STATE.pinned_label) if STATE.pinned_label else "",
         last_on_page=STATE.last_on_page[:1200] or "(none yet)",
         last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
         thread=tblock,
     )
 
 
-def absorb_twin(entry, snap):
+def absorb_twin(entry, snap, next_from=None):
     """Fold a finished check's structured fields into the twin. Under lock."""
     if entry.get("grid"):
         STATE.grid = entry["grid"]
@@ -665,7 +693,22 @@ def absorb_twin(entry, snap):
         return                          # unreadable frame: keep card + equations
     p = entry.get("problem")
     if p and p.get("label"):
-        STATE.problem = p
+        if next_from and p["label"] != next_from:
+            # Next: pin the newly identified problem so routine re-reads of the
+            # page (whose freshest work is still the OLD problem) can't snap
+            # the card back. The pin dissolves when writing genuinely moves.
+            STATE.pinned_label, STATE.pinned_from = p["label"], next_from
+            STATE.problem = p
+        elif STATE.pinned_label and not next_from:
+            if p["label"] == STATE.pinned_label:
+                STATE.problem = p       # progress on the pinned problem
+            elif p["label"] == STATE.pinned_from:
+                pass                    # snap-back to the problem the student left: ignore
+            else:                       # writing moved somewhere new: pin dissolves
+                STATE.problem = p
+                STATE.pinned_label = STATE.pinned_from = None
+        else:
+            STATE.problem = p
     if entry.get("equations"):
         STATE.equations = entry["equations"]
     if entry.get("on_page"):
@@ -737,7 +780,7 @@ def checker(frames_dir):
                                        STATE.model, on_text=push)
             entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
-                absorb_twin(entry, snap)
+                absorb_twin(entry, snap, next_from=next_from)
                 if entry.get("check") and entry.get("kind") in ("confirm", "fix"):
                     STATE.last_checks = (STATE.last_checks + [entry["check"]])[-3:]
                     label = (entry.get("problem") or STATE.problem or {}).get("label")
@@ -787,11 +830,13 @@ def checker(frames_dir):
 def run_chat(cid, text, anchor, frames_dir):
     """One typed (or pen-pointed) student message → one streamed reply."""
     now = datetime.now().strftime("%H:%M")
+    tag = anchor and (anchor_region(anchor["x"], anchor["y"]) if anchor["kind"] == "region"
+                      else anchor["text"][:28] + ("…" if len(anchor["text"]) > 28 else ""))
     with STATE.lock:
         label = (STATE.problem or {}).get("label") or "page"
         STATE.asks[label] = STATE.asks.get(label, 0) + 1
         asks = STATE.asks[label]
-        shown = text + (f"  ⌖ {anchor_region(*anchor)}" if anchor else "")
+        shown = text + (f"  ⌖ {tag}" if tag else "")
         STATE.threads.setdefault(label, []).append(
             {"who": "you", "text": shown, "time": now, "kind": "chat", "snap": None, "id": cid})
         problem = fmt_problem(STATE.problem)
@@ -808,18 +853,19 @@ def run_chat(cid, text, anchor, frames_dir):
         EVENTS.emit(type="chat_partial", id=cid, text=t)
     anchor_note, blocks = "", []
     try:
+        if anchor and anchor["kind"] != "region":
+            anchor_note = ANCHOR_NOTES[anchor["kind"]].format(text=anchor["text"])
         if img and (frames_dir / img).exists():
-            if anchor:
-                crop = crop_for_anchor(frames_dir / img, *anchor)
+            blocks = [img_block(shrink_for_model(frames_dir / img, 960))]
+            if anchor and anchor["kind"] == "region":
+                crop = crop_for_anchor(frames_dir / img, anchor["x"], anchor["y"])
                 st.hit("crop")
-                anchor_note = ANCHOR_NOTE.format(
-                    region=anchor_region(*anchor),
+                anchor_note = ANCHOR_NOTES["region"].format(
+                    text=anchor_region(anchor["x"], anchor["y"]),
                     crop=" (a full-resolution close-up of that spot is the second image)"
                          if crop else "")
-                blocks = [img_block(shrink_for_model(frames_dir / img, 960))] + \
-                         ([img_block(crop)] if crop else [])
-            else:
-                blocks = [img_block(shrink_for_model(frames_dir / img, 960))]
+                if crop:
+                    blocks.append(img_block(crop))
         prompt = CHAT_PROMPT.format(anchor_note=anchor_note, problem=problem,
                                     last_on_page=on_page, last_checks=notes,
                                     thread=thread, asks=asks, text=text)
@@ -1034,14 +1080,23 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.body() or b"{}")
             text = (data.get("text") or "").strip()[:2000]
             anchor = data.get("anchor")
-            if anchor is not None:
+            if isinstance(anchor, dict):        # twin-element or map-cell pointer
+                kind = anchor.get("kind")
                 try:
-                    anchor = (min(max(float(anchor["x"]), 0.0), 1.0),
-                              min(max(float(anchor["y"]), 0.0), 1.0))
+                    if kind == "region":
+                        anchor = {"kind": "region",
+                                  "x": min(max(float(anchor["x"]), 0.0), 1.0),
+                                  "y": min(max(float(anchor["y"]), 0.0), 1.0)}
+                    elif kind in ("line", "equation", "problem") and str(anchor.get("text", "")).strip():
+                        anchor = {"kind": kind, "text": str(anchor["text"]).strip()[:300]}
+                    else:
+                        anchor = None
                 except (KeyError, TypeError, ValueError):
                     anchor = None
+            else:
+                anchor = None
             if not text:
-                text = "What about this spot?" if anchor else ""
+                text = "What about this?" if anchor else ""
             if not text:
                 return self.send(400, b"empty message", "text/plain")
             with STATE.lock:
