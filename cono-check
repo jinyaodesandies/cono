@@ -35,6 +35,7 @@ Usage:
   cono-check --no-contrast       # same as --contrast off
   cono-check --no-record         # testdev opt-out: run live without recording
   cono-check --dev               # start in dev mode (show instrumentation)
+  cono-check --view ambient      # start in the ambient face (default: twin)
   cono-check --no-open           # don't open the browser automatically
 Ctrl-C to stop.
 
@@ -241,6 +242,7 @@ class State:
         self.snap_n = 0
         self.record = True              # testdev: live modes record unless --no-record
         self.dev = False                # dev mode: show instrumentation (logging never stops)
+        self.view = "twin"              # display face: twin (default) | ambient
         self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
         self.last_on_page = ""          # page-state memory: latest good transcription
         self.last_checks = []           # ...and the last few notes given (don't repeat)
@@ -276,7 +278,7 @@ class State:
                 "session_active": SESSION.active, "cap_error": self.cap_error,
                 "session_ms": SESSION.t() if SESSION.active else 0,
                 "session_path": str(SESSION.dir) if SESSION.active else None,
-                "record": self.record, "dev": self.dev,
+                "record": self.record, "dev": self.dev, "view": self.view,
                 "twin": {
                     "problem": self.problem, "equations": self.equations,
                     "grid": self.grid, "grid_snap": self.grid_snap,
@@ -1234,6 +1236,15 @@ class Handler(BaseHTTPRequestHandler):
                 on = STATE.dev
             SESSION.event("dev_set", on=on)
             self.send(200, json.dumps({"on": on}).encode(), "application/json")
+        elif url.path == "/view":                    # twin <-> ambient face (display only)
+            data = json.loads(self.body() or b"{}")
+            v = data.get("view")
+            if v not in ("twin", "ambient"):
+                return self.send(400, b"view must be twin or ambient", "text/plain")
+            with STATE.lock:
+                STATE.view = v
+            SESSION.event("view_set", view=v)
+            self.send(200, json.dumps({"view": v}).encode(), "application/json")
         elif url.path == "/suggest":                 # improvement suggestion, with context
             data = json.loads(self.body() or b"{}")
             text = (data.get("text") or "").strip()[:1000]
@@ -1434,6 +1445,14 @@ def main():
         args.remove("--dev")
         with STATE.lock:
             STATE.dev = True
+    if "--view" in args:
+        i = args.index("--view")
+        v = args[i + 1]
+        if v not in ("twin", "ambient"):
+            sys.exit("--view takes twin or ambient")
+        with STATE.lock:
+            STATE.view = v
+        del args[i:i + 2]
     if "demo" in args:
         replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
     if "session" in args:               # no-op alias from the 10-minute era

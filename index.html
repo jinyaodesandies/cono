@@ -53,6 +53,24 @@
     body.busy .cone .sheen, body.busy .cone .shade { animation: none; }
   }
   header .demo-mark { color: var(--faded); font-size: 14px; }
+  .viewtoggle {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+  }
+  .viewtoggle .vt {
+    background: none;
+    border: none;
+    color: var(--faded);
+    font-size: 13px;
+    padding: 3px 13px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .viewtoggle .vt:hover { color: var(--paper); }
+  .viewtoggle .vt.on { background: var(--lamp-dim); color: var(--lamp); }
   header .status { color: var(--faded); font-size: 14px; }
   header .status b { color: var(--lamp); font-weight: 500; }
   header .status b.calm { color: var(--faded); }
@@ -91,6 +109,26 @@
   @media (max-width: 900px) {
     main { grid-template-columns: 1fr; }
   }
+
+  /* ---------- Ambient face: camera is the hero, notes are the margin ----
+     Same DOM, same plumbing — only which column is wide, and which of the
+     twin's analytical panels are shown, changes. */
+  body.view-ambient main { grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr); }
+  body.view-ambient .twin { order: 2; }         /* notes margin, right */
+  body.view-ambient .side { order: 1; }         /* camera hero, left */
+  body.view-ambient .twin {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  body.view-ambient .equations,
+  body.view-ambient .onpagebox { display: none; }   /* the analytical panels rest */
+  body.view-ambient .probcard { border-bottom: 1px solid var(--line); }
+  body.view-ambient .stage .frame-wrap { aspect-ratio: 4 / 3; }
+  body.view-ambient .camhead h3 { font-size: 15px; }
+  /* in ambient the camera caption leads; the twin's note stream is quieter */
+  body.view-ambient .dialogue .msg.cono { font-size: 15px; }
+  body:not(.view-ambient) .ambient-only { display: none; }
 
   /* ---------- the digital twin: the sheet of paper, reborn ---------- */
   .twin {
@@ -459,6 +497,10 @@
     <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="none" stroke="rgba(242,237,227,0.25)" stroke-width="0.6"/>
   </svg>Cono check</h1>
   <span class="demo-mark" id="demomark" hidden>demo</span>
+  <span class="viewtoggle" id="viewtoggle" role="tablist" aria-label="View" hidden>
+    <button class="vt" data-view="twin" type="button" role="tab">Twin</button>
+    <button class="vt" data-view="ambient" type="button" role="tab">Ambient</button>
+  </span>
   <span class="status"><span class="lampdot" id="lamp"></span><b id="statusword" class="calm">starting</b><span id="statusrest"></span></span>
   <span class="rec" id="rec" hidden></span>
 </header>
@@ -1187,6 +1229,24 @@
     el("stagebtn").hidden = !mode || !devMode;
   }
 
+  // ---------- twin <-> ambient face: display only, same plumbing + logging
+  let viewFace = "twin";
+  function renderView(s) {
+    viewFace = s.view === "ambient" ? "ambient" : "twin";
+    document.body.classList.toggle("view-ambient", viewFace === "ambient");
+    el("viewtoggle").hidden = !mode;
+    el("viewtoggle").querySelectorAll(".vt").forEach(b =>
+      b.classList.toggle("on", b.dataset.view === viewFace));
+  }
+  el("viewtoggle").querySelectorAll(".vt").forEach(b =>
+    b.addEventListener("click", async () => {
+      const v = b.dataset.view;
+      if (v === viewFace) return;
+      localStorage.setItem("cono-view", v);
+      await fetch("/view", { method: "POST", body: JSON.stringify({ view: v }) }).catch(() => null);
+      poll.soon();
+    }));
+
   // ---------- study <-> dev mode: changes what's shown, never what's logged
   function renderDev(s) {
     devMode = !!s.dev;
@@ -1478,6 +1538,9 @@
     if (!mode) {
       mode = s.mode;
       startEvents();
+      const savedView = localStorage.getItem("cono-view");   // persist across launches
+      if (savedView && savedView !== s.view)
+        fetch("/view", { method: "POST", body: JSON.stringify({ view: savedView }) }).catch(() => null);
       if (mode === "live") {
         el("pausebtn").hidden = false;
         startCamera();
@@ -1520,6 +1583,7 @@
     renderRibbon(s.checks || []);
     renderDialogue();
     renderHistory(s.checks || []);
+    renderView(s);
     renderDev(s);
     renderContrast(s);
     renderStages();
