@@ -69,7 +69,7 @@ and camera permission, with a fix suggestion for anything that fails.
 Other flags:
 
 ```bash
-cono-check --model opus          # pick the model (default: sonnet)
+cono-check --model opus          # pick the model (default: opus)
 cono-check --replay DIR          # replay any recorded session directory
 cono-check --port 9000           # serve somewhere else (default: 8764)
 cono-check --contrast strong     # writing clarity: off | auto (default) | strong

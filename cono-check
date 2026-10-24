@@ -29,7 +29,7 @@ Usage:
   cono-check session             # 10-minute recorded session (Desk View)
   cono-check demo                # no camera needed: bundled sample session (demo chem = chemistry)
   cono-check doctor              # preflight: is everything ready to run?
-  cono-check --model opus        # pick the model (default: sonnet)
+  cono-check --model opus        # pick the model (default: opus)
   cono-check --replay DIR        # replay any recorded session directory
   cono-check --port 9000         # serve somewhere else (default: 8764)
   cono-check --contrast strong   # writing clarity: off | auto (default) | strong
@@ -210,7 +210,7 @@ class State:
         self.lock = threading.Lock()
         self.status = "watching"        # watching|checking (writing is client-side)
         self.mode = "live"              # live|replay
-        self.model = "sonnet"
+        self.model = "opus"
         self.frame = None               # latest replay frame filename
         self.frame_n = 0
         self.checks = []                # newest first
@@ -1318,7 +1318,7 @@ def main():
     args = sys.argv[1:]
     if "doctor" in args:
         doctor()
-    model, port, replay_dir = "sonnet", 8764, None
+    model, port, replay_dir = "opus", 8764, None
     open_browser = "--no-open" not in args
     if "--no-contrast" in args:
         with STATE.lock:
