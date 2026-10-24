@@ -239,17 +239,32 @@
   /* ---------- side: live video for framing + readability map ---------- */
   .side { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
   .stage { position: relative; }
-  .stage .frame-wrap { position: relative; }
+  .stage .frame-wrap {
+    position: relative;
+    aspect-ratio: 4 / 3;              /* a real viewfinder, never a thin strip */
+    border-radius: 4px;
+    background: #15130f;
+    box-shadow: 0 1px 0 rgba(242, 237, 227, 0.1) inset, 0 12px 34px -14px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+  }
   .stage video, .stage img.replay {
     display: block;
     width: 100%;
+    height: 100%;
+    object-fit: contain;
     border-radius: 4px;
-    box-shadow: 0 1px 0 rgba(242, 237, 227, 0.1) inset, 0 12px 34px -14px rgba(0, 0, 0, 0.7);
     background: #15130f;
-    min-height: 140px;
   }
   .stage img.replay { position: absolute; inset: 0; transition: opacity 0.25s; }
   .stage img.replay.under { position: static; }
+  .camwait {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--faded);
+    font-size: 13.5px;
+  }
   @media (prefers-reduced-motion: reduce) { .stage img.replay { transition: none; } }
   .stage .snapring {
     position: absolute; inset: -2px;
@@ -262,12 +277,14 @@
   @keyframes ringpulse { 0% { opacity: 0.9; } 100% { opacity: 0; } }
   .stage .offline {
     display: none;
-    padding: 46px 22px;
+    position: absolute;
+    inset: 0;
+    padding: 36px 22px;
     text-align: center;
     color: var(--faded);
     background: var(--surface);
     border-radius: 4px;
-    min-height: 140px;
+    overflow-y: auto;
   }
   .stage .offline h2 { color: var(--paper); font-size: 15px; font-weight: 600; margin-bottom: 8px; }
   .stage .offline p { max-width: 44ch; margin: 0 auto 14px; font-size: 13.5px; }
@@ -484,8 +501,10 @@
   <!-- the real paper: framing view + what the model could read -->
   <aside class="side">
     <figure class="stage" id="stage">
+      <div class="maphead"><h3>Camera</h3><span class="maptime" id="camlabel"></span></div>
       <div class="frame-wrap" id="framewrap">
         <video id="video" autoplay playsinline muted hidden></video>
+        <div class="camwait" id="camwait">camera starting…</div>
         <div class="offline" id="offline"></div>
         <div class="snapring" id="snapring"></div>
       </div>
@@ -618,6 +637,7 @@
         : ["Cono needs your camera.", "Your browser blocked camera access for this page. Allow it — usually the camera icon in the address bar — then try again."], startCamera);
     }
     el("offline").style.display = "none";
+    el("camwait").hidden = true;
     el("video").hidden = false;
     el("video").srcObject = stream;
     document.body.classList.remove("paused");
@@ -845,19 +865,32 @@
     setTimeout(() => f.remove(), 450);
   }
 
-  // ---------- deskview live stream ----------
-  let streamFailed = false;
-  function startStream() {
-    const img = document.createElement("img");
-    img.className = "replay under";
-    img.alt = "Live Desk View of the page";
-    img.src = "/stream";
-    img.onerror = () => {         // stream unavailable: fall back to ~1/s frame polling
-      img.remove();
-      streamFailed = true;
-      lastFrameN = -1;
-    };
-    el("framewrap").prepend(img);
+  // ---------- deskview live view ----------
+  // Poll /live.jpg at ~6 fps with an offscreen loader (no flicker: the view
+  // img swaps to the cached frame on load). The old MJPEG <img src=/stream>
+  // rendered a permanent black box in Chromium WITHOUT firing onerror, so
+  // the fallback never ran — that was "where is the camera feature?".
+  let livePolling = false;
+  function startLivePoll() {
+    if (livePolling) return;
+    livePolling = true;
+    const view = document.createElement("img");
+    view.className = "replay under";
+    view.alt = "Live Desk View of the page";
+    el("framewrap").prepend(view);
+    const loader = new Image();
+    let waiting = false;
+    setInterval(() => {
+      if (waiting || paused) return;
+      waiting = true;
+      loader.onload = () => {
+        view.src = loader.src;
+        el("camwait").hidden = true;
+        waiting = false;
+      };
+      loader.onerror = () => { waiting = false; };   // no frame yet: retry
+      loader.src = "/live.jpg?n=" + Date.now();
+    }, 160);
   }
 
   // ---------- replay mode stage ----------
@@ -1449,16 +1482,17 @@
         el("pausebtn").hidden = false;
         startCamera();
       } else if (mode === "deskview") {
-        el("caption").textContent = "Framing view — live from the Desk View camera. Only gated snapshots are read.";
+        el("caption").textContent = "Live from the Desk View camera — frame your page here.";
         el("checknow").disabled = false;
-        startStream();
+        startLivePoll();
       } else {
         el("demomark").hidden = false;
+        el("camwait").hidden = true;
         el("caption").textContent = "Replaying a recorded session — no camera in use.";
         el("checknow").disabled = false;
       }
     }
-    if (mode === "replay" || (mode === "deskview" && streamFailed)) {
+    if (mode === "replay") {
       if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
     }
     if (mode !== "live" && s.status === "watching") manualPending = false;
@@ -1473,8 +1507,8 @@
           if (r.ok) {
             poll.capErrShown = false;
             el("offline").style.display = "none";
-            el("caption").textContent = "Framing view — live from the Desk View camera. Only gated snapshots are read.";
-            startStream();
+            el("caption").textContent = "Live from the Desk View camera — frame your page here.";
+            startLivePoll();
           }
         });
       el("caption").textContent = "";
