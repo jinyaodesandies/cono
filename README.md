@@ -187,44 +187,54 @@ with the "stage trace" button; the per-stage timestamps are logged into
 every session record and `tools/score-session.py` prints a stage-timing
 table from them.
 
-## Record a 10-minute session
+## Every live run is recorded (testdev mode)
 
-```bash
-cono-check session               # uses Desk View; `cono-check session live` for a browser camera
-```
+Cono is in full test-development mode: **every live run — Desk View or
+browser — is recorded locally for development**, from launch until you
+press "End & rate" or stop the server. There is no separate session
+mode and no timer. While recording, a ● indicator with a running clock
+stays visible in the header.
 
-For developing the checking itself: a consented, contained recording of
-one real work session. After you click "Start recording," Cono saves a
-photo of your page every 3 seconds for 10 minutes — plus every snapshot
-it reads, every note it writes (each check rotates through four feedback
-styles so sessions also measure what kind of help works), every chat
-message, pen-point, and Next press, per-check latency and time to first
-streamed word, the page-change signal, and your button presses — into
-one local folder (`~/deskcap/session-<timestamp>/`, with a
-`session.json` manifest and an `events.jsonl` interaction log). When the
-clock runs out you rate each note (Helped / Didn't help / Wrong) and
-answer two questions; one click deletes the whole folder if you want it
-gone. Nothing records before the consent click, and nothing leaves the
-machine beyond the normal snapshot path. The same flow starts from the
-"Record a 10-minute session" button under the video in normal live mode.
+What gets saved, all into one local folder
+(`~/deskcap/session-<timestamp>/`, with a `session.json` manifest and
+an `events.jsonl` interaction log): a photo of your page every 3
+seconds (thinned to every 10 seconds after the first 10 minutes, so a
+two-hour class stays in the hundreds of MB — the server prints the
+folder size every 10 minutes and at the end), every snapshot read,
+every note written (each check rotates through four feedback styles so
+sessions also measure what kind of help works), every chat message,
+pen-point, Next press and suggestion, per-check latency, stage and
+clarity metadata, and the page-change signal.
+
+**"End & rate" is the data engine**: ending the session walks you
+through rating each note (Helped / Didn't help / Wrong — skippable) and
+two short questions, then offers one-click **Delete this session** (or
+"Record again"). Quitting the server mid-session still writes a
+complete, scoreable bundle. Nothing leaves this machine beyond the
+snapshots Claude already reads through your own login — but if you
+don't want a run recorded at all, start with **`--no-record`**.
+Demo and replay runs never record.
 
 Afterwards, `tools/score-session.py ~/deskcap/session-<ts>` turns the
-ratings into per-style and per-config tables (now including latency and
-first-token columns). `tools/experiment.py` replays a recording through
-a matrix of snap frequencies, image preprocessing, and prompt structures
-and writes a side-by-side `report.md`; needs Pillow (`pip install
-pillow`) and costs real `claude` calls.
+ratings into per-style and per-config tables (latency, first-token and
+stage-timing columns; unrated sessions still get the latency and stage
+tables). `tools/experiment.py` replays a recording through a matrix of
+snap frequencies, image preprocessing, and prompt structures and writes
+a side-by-side `report.md`; needs Pillow (`pip install pillow`) and
+costs real `claude` calls.
 
 Handy: symlink it onto your PATH so it's one word from anywhere:
 `ln -s "$PWD/cono-check/cono-check" /opt/homebrew/bin/cono-check`
 
 ## What gets sent where
 
-The live video is for your eyes only — it's never recorded, uploaded,
-or shown to the AI. Frames are compared locally, and only when your page
-has changed and settled does one snapshot go to the local server, which
-reads it through your own `claude` login — never more than one every
-5 seconds, and typically just a few per problem. Every note in the
+The live video stream itself is never uploaded or shown to the AI —
+frames are compared locally. In testdev mode, periodic photos of the
+page ARE saved to the local session folder (see above; `--no-record`
+opts out), and only when your page has changed and settled does one
+snapshot go to the local server, which reads it through your own
+`claude` login — never more than one every 5 seconds, and typically
+just a few per problem. Every note in the
 dialogue and the history shows exactly the frame that was read. When you
 send a chat message in browser mode, one fresh snapshot is taken so the
 answer matches what's on your desk right now; pen-pointed questions also

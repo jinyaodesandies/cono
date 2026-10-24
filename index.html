@@ -483,8 +483,7 @@
           title="Clarity pass on snapshots before reading — auto stretches contrast, strong lifts faint strokes">writing clarity: auto</button>
         <button class="quiet" id="stagebtn" type="button" hidden
           title="Test feature: live trace of which stage of the reading a check is in">stage trace: on</button>
-        <button class="quiet" id="sessionbtn" type="button" hidden>Record a 10-minute session</button>
-        <button class="quiet" id="endbtn" type="button" hidden>End session</button>
+        <button class="quiet" id="endbtn" type="button" hidden>End &amp; rate</button>
         <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
       </div>
       <div id="sessionpanel" hidden></div>
@@ -1230,69 +1229,64 @@
     };
   }
 
-  // ---------- 10-minute recorded session ----------
-  const SESSION_S = 600, DENSE_MS = 3000;
-  let session = null;   // {start, left, timers:[], signal:[], snaps:[], paused}
+  // ---------- always-on session recording (testdev) ----------
+  // Recording starts server-side at launch and runs until "End & rate" or
+  // the server stops. No timer, no consent panel: every live run is data.
+  const DENSE_MS = 3000, DENSE_LATE_MS = 10000, DENSE_SWITCH_MS = 600000;
+  let session = null;   // live-mode recorders: {timers, signal, paused, lastDense, ...}
+  let sessionMs = 0;    // server's elapsed recording clock
 
   function sessionEvent(type, extra = {}) {
-    if (session) fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) });
+    if (lastState?.session_active)
+      fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) });
   }
 
-  function showConsent() {
-    const p = el("sessionpanel");
-    p.hidden = false;
-    p.innerHTML = `<div class="panel">
-      <h2>Record a 10-minute session?</h2>
-      <p>Cono will save a photo of your page every 3 seconds for 10 minutes, plus
-      every snapshot it reads, every note it writes, and everything you type or
-      point at — all into one folder on this Mac. Nothing leaves this computer
-      except the snapshots Claude already reads through your own login. You can
-      end it early, and you can delete the whole folder afterwards with one click.</p>
-      <p>Frame the camera on your page, not on yourself.</p>
-      <div class="row"><button class="pill" id="consentgo">Start recording</button>
-      <button class="quiet" id="consentno">Not now</button></div></div>`;
-    el("consentgo").onclick = startSession;
-    el("consentno").onclick = () => { p.hidden = true; };
-  }
-
-  async function startSession() {
-    const track = stream?.getVideoTracks()[0];
-    await fetch("/session/start", { method: "POST", body: JSON.stringify({
-      camera_label: track?.label || (mode === "deskview" ? "Desk View (deskcap)" : ""),
-      video_res: mode === "deskview" ? [1920, 1440]
-                 : [el("video").videoWidth, el("video").videoHeight],
-    }) });
-    el("sessionpanel").hidden = true;
-    el("sessionbtn").hidden = true;
-    el("endbtn").hidden = false;
-    session = { start: performance.now(), left: SESSION_S, signal: [], snaps: [], paused: false,
-                framingShown: false, checksAtStart: lastState ? lastState.checks.length : 0, timers: [] };
-    session.timers.push(setInterval(async () => {          // dense frames
+  function attachRecorders() {          // live mode: the browser is the camera
+    session = { signal: [], paused, lastDense: 0, framingShown: false,
+                checksAtStart: lastState ? lastState.checks.length : 0, timers: [] };
+    session.timers.push(setInterval(async () => {   // dense page photos, thinned after 10 min
       if (session.paused || mode !== "live") return;
+      const gap = sessionMs > DENSE_SWITCH_MS ? DENSE_LATE_MS : DENSE_MS;
+      if (Date.now() - session.lastDense < gap) return;
+      session.lastDense = Date.now();
       const b = await grabBlob();
       if (b) fetch("/session/frame", { method: "POST", body: b });
-    }, DENSE_MS));
-    session.timers.push(setInterval(() => {                // gating signal batch
+    }, 1000));
+    session.timers.push(setInterval(() => {         // gating signal batch
       if (session.signal.length) {
         fetch("/session/signal", { method: "POST", body: JSON.stringify(session.signal.splice(0)) });
       }
     }, 5000));
-    session.timers.push(setInterval(() => {                // countdown
-      if (!session.paused) {
-        session.left -= 1;
-        if (session.left <= 0) return endSession(false);
-      }
-      el("rec").textContent = session.paused ? "recording paused"
-        : `recording · ${Math.floor(session.left / 60)}:${String(session.left % 60).padStart(2, "0")} left`;
-    }, 1000));
-    el("rec").hidden = false;
-    el("rec").textContent = "recording · 10:00 left";
+    const track = stream?.getVideoTracks()[0];      // merge camera meta into the bundle
+    fetch("/session/start", { method: "POST", body: JSON.stringify({
+      camera_label: track?.label || "",
+      video_res: [el("video").videoWidth, el("video").videoHeight],
+    }) }).catch(() => null);
   }
 
-  async function endSession(early) {
-    const s = session;
+  function detachRecorders() {
+    if (session) session.timers.forEach(clearInterval);
     session = null;
-    s.timers.forEach(clearInterval);
+  }
+
+  function renderRec(s) {
+    sessionMs = s.session_ms || 0;
+    if (s.session_active) {
+      el("rec").hidden = false;
+      const m = Math.floor(sessionMs / 60000), sec = Math.floor(sessionMs / 1000) % 60;
+      el("rec").textContent = (session?.paused ? "recording paused · " : "recording · ") +
+                              m + ":" + String(sec).padStart(2, "0");
+      el("endbtn").hidden = false;
+      if (mode === "live" && !session) attachRecorders();
+    } else {
+      el("rec").hidden = true;
+      el("endbtn").hidden = true;
+      detachRecorders();
+    }
+  }
+
+  async function endSession() {
+    detachRecorders();
     el("rec").hidden = true;
     el("endbtn").hidden = true;
     el("framingline").hidden = true;
@@ -1300,8 +1294,8 @@
       const final = await grabBlob();
       if (final) await fetch("/session/final", { method: "POST", body: final });
     }
-    const info = await (await fetch("/session/end", { method: "POST", body: JSON.stringify({ ended_early: early }) })).json();
-    annotate(info);
+    const info = await (await fetch("/session/end", { method: "POST", body: "{}" })).json();
+    if (info.path) annotate(info);
   }
 
   function annotate(info) {
@@ -1323,12 +1317,14 @@
           <button class="pill" data-v="didnt">Didn’t help</button>
           <button class="pill" data-v="wrong">Wrong</button></div>
         <div class="row"><input type="text" id="aNote" placeholder="What did you actually need here? (optional)"></div>
-        <div class="row"><button class="quiet" id="aNext">Next</button></div></div>`;
+        <div class="row"><button class="quiet" id="aNext">Next</button>
+        <button class="quiet" id="aSkip">Skip rating</button></div></div>`;
       p.querySelectorAll(".verdicts .pill").forEach(b => b.onclick = () => {
         c.verdict = b.dataset.v;
         p.querySelectorAll(".verdicts .pill").forEach(x => x.classList.toggle("on", x === b));
       });
       el("aNext").onclick = () => { c.note = el("aNote").value; i++; stepCheck(); };
+      el("aSkip").onclick = () => saved();      // the bundle is already complete
     }
     function stepStuck() {
       p.innerHTML = `<div class="panel">
@@ -1342,25 +1338,39 @@
         answers.stuck = el("aStuck").value;
         answers.wanted = el("aWanted").value;
         await fetch("/session/annotate", { method: "POST", body: JSON.stringify(answers) });
-        p.innerHTML = `<div class="panel">
-          <h2>Session saved</h2>
-          <p>${(info.path || "~/deskcap/session-…").replace(/</g, "&lt;")} (${info.mb ?? "?"} MB)</p>
-          <div class="row"><button class="quiet" id="aDelete">Delete this session</button>
-          <button class="pill" id="aClose">Done</button></div></div>`;
-        el("aClose").onclick = () => { p.hidden = true; el("sessionbtn").hidden = false; };
-        el("aDelete").onclick = async () => {
-          await fetch("/session/delete", { method: "POST" });
-          p.innerHTML = `<div class="panel"><h2>Session deleted</h2>
-            <div class="row"><button class="pill" id="aClose2">Done</button></div></div>`;
-          el("aClose2").onclick = () => { p.hidden = true; el("sessionbtn").hidden = false; };
+        saved();
+      };
+    }
+    function saved() {
+      p.innerHTML = `<div class="panel">
+        <h2>Session saved</h2>
+        <p>${(info.path || "~/deskcap/session-…").replace(/</g, "&lt;")} (${info.mb ?? "?"} MB)</p>
+        <div class="row"><button class="quiet" id="aDelete">Delete this session</button>
+        <button class="quiet" id="aAgain">Record again</button>
+        <button class="pill" id="aClose">Done</button></div></div>`;
+      el("aClose").onclick = () => { p.hidden = true; };
+      el("aAgain").onclick = async () => {
+        await fetch("/session/start", { method: "POST", body: "{}" });
+        p.hidden = true;
+        poll.soon();
+      };
+      el("aDelete").onclick = async () => {
+        await fetch("/session/delete", { method: "POST" });
+        p.innerHTML = `<div class="panel"><h2>Session deleted</h2>
+          <div class="row"><button class="quiet" id="aAgain2">Record again</button>
+          <button class="pill" id="aClose2">Done</button></div></div>`;
+        el("aClose2").onclick = () => { p.hidden = true; };
+        el("aAgain2").onclick = async () => {
+          await fetch("/session/start", { method: "POST", body: "{}" });
+          p.hidden = true;
+          poll.soon();
         };
       };
     }
     stepCheck();
   }
 
-  el("sessionbtn").addEventListener("click", showConsent);
-  el("endbtn").addEventListener("click", () => endSession(true));
+  el("endbtn").addEventListener("click", endSession);
 
   // ---------- state polling ----------
   let pollTimer = null;
@@ -1383,14 +1393,11 @@
       startEvents();
       if (mode === "live") {
         el("pausebtn").hidden = false;
-        el("sessionbtn").hidden = false;
-        startCamera().then(() => { if (s.session_panel) showConsent(); });
+        startCamera();
       } else if (mode === "deskview") {
-        el("sessionbtn").hidden = false;
         el("caption").textContent = "Framing view — live from the Desk View camera. Only gated snapshots are read.";
         el("checknow").disabled = false;
         startStream();
-        if (s.session_panel) showConsent();
       } else {
         el("demomark").hidden = false;
         el("caption").textContent = "Replaying a recorded session — no camera in use.";
@@ -1427,6 +1434,7 @@
     renderHistory(s.checks || []);
     renderContrast(s);
     renderStages();
+    renderRec(s);
     if (session && !session.framingShown && s.checks.length > session.checksAtStart) {
       const first = s.checks[0];            // first check since recording started
       if (first && first.visibility != null) {

@@ -25,11 +25,11 @@ def table(title, groups):
     lines = [f"### by {title}", "",
              "| " + title + " | checks | rated | helped | wrong | helped-rate | mean latency |",
              "|---|---|---|---|---|---|---|"]
-    for key, rows in sorted(groups.items()):
+    for key, rows in sorted(groups.items(), key=lambda kv: str(kv[0])):
         r = rate(rows)
         lines.append(f"| {key} | {r['checks']} | {r['rated']} | {r['helped']} | {r['wrong']} | "
                      f"{r['helped_rate'] if r['helped_rate'] is not None else '—'} | "
-                     f"{r['mean_latency_s']}s |")
+                     f"{str(r['mean_latency_s']) + 's' if r['mean_latency_s'] is not None else '—'} |")
     return lines + [""]
 
 
@@ -42,9 +42,13 @@ def main():
                f"duration {m['duration_s']}s · {len(checks)} checks · camera {m.get('camera_label', '?')}",
                f"stuck: {m['annotations'].get('stuck', '')!r} · wanted: {m['annotations'].get('wanted', '')!r}", ""]
         overall = rate(checks)
-        out.append(f"**Overall:** {overall['helped']}/{overall['rated']} helped "
-                   f"({overall['helped_rate']}), {overall['wrong']} wrong, "
-                   f"mean latency {overall['mean_latency_s']}s")
+        if overall["rated"]:
+            out.append(f"**Overall:** {overall['helped']}/{overall['rated']} helped "
+                       f"({overall['helped_rate']}), {overall['wrong']} wrong, "
+                       f"mean latency {overall['mean_latency_s']}s")
+        else:
+            out.append(f"**Overall:** {overall['checks']} checks, none rated "
+                       f"(rating pass skipped), mean latency {overall['mean_latency_s']}s")
         out.append("")
         for dim, key in (("style", lambda c: c.get("config", {}).get("style", c.get("style", "?"))),
                          ("structure", lambda c: c.get("config", {}).get("structure", "?")),
