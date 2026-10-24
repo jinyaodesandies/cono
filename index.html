@@ -37,6 +37,21 @@
     padding: 18px 26px 10px;
   }
   header h1 { font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
+
+  /* the Cono cone: spins (a sheen sweeping its surface) while a check or
+     chat reply is being read; rests otherwise. Pure inline SVG + CSS. */
+  .cone { width: 17px; height: 19px; margin-right: 8px; vertical-align: -2px; }
+  .cone .sheen, .cone .shade { transform: skewX(-6deg) translateX(-9px); }
+  .cone .shade { transform: skewX(-6deg) translateX(14px); }
+  body.busy .cone .sheen { animation: conespin 1.6s linear infinite; }
+  body.busy .cone .shade { animation: conespin 1.6s linear infinite; animation-delay: -0.8s; }
+  @keyframes conespin {
+    from { transform: skewX(-6deg) translateX(-9px); }
+    to   { transform: skewX(-6deg) translateX(27px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.busy .cone .sheen, body.busy .cone .shade { animation: none; }
+  }
   header .demo-mark { color: var(--faded); font-size: 14px; }
   header .status { color: var(--faded); font-size: 14px; }
   header .status b { color: var(--lamp); font-weight: 500; }
@@ -401,7 +416,16 @@
 </head>
 <body>
 <header>
-  <h1>Cono check</h1>
+  <h1><svg class="cone" viewBox="0 0 24 27" aria-hidden="true">
+    <defs><clipPath id="coneclip"><path d="M12 1.5 L21.6 21 A9.6 3.6 0 0 1 2.4 21 Z"/></clipPath></defs>
+    <path d="M12 1.5 L21.6 21 A9.6 3.6 0 0 1 2.4 21 Z" fill="#8a6f3c"/>
+    <g clip-path="url(#coneclip)">
+      <rect class="sheen" x="0" y="0" width="7" height="27" fill="rgba(242,237,227,0.45)"/>
+      <rect class="shade" x="0" y="0" width="7" height="27" fill="rgba(30,27,23,0.35)"/>
+    </g>
+    <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="#b58b43"/>
+    <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="none" stroke="rgba(242,237,227,0.25)" stroke-width="0.6"/>
+  </svg>Cono check</h1>
   <span class="demo-mark" id="demomark" hidden>demo</span>
   <span class="status"><span class="lampdot" id="lamp"></span><b id="statusword" class="calm">starting</b><span id="statusrest"></span></span>
   <span class="rec" id="rec" hidden></span>
@@ -545,6 +569,9 @@
     el("statusrest").textContent = rest;
     el("lamp").className = "lampdot " + s;
     el("checknow").disabled = paused || !mode || (manualPending && serverStatus === "checking");
+    // the cone spins while anything is being read (check or chat reply)
+    document.body.classList.toggle("busy",
+      serverStatus === "checking" || chatWaiting || !!liveChat || !!(stageRun && !stageRun.done));
   }
 
   // ---------- camera (live mode) ----------
@@ -1138,6 +1165,7 @@
         renderStages();
         poll.soon();
       }
+      setStatus();
     };
   }
 

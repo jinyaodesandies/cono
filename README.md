@@ -80,6 +80,13 @@ cono-check --no-open             # don't open the browser automatically
 
 **Problem card.** The question you're currently on, extracted from the
 worksheet and pinned at the top with Cono's read of your progress on it.
+Questions are remembered: once Cono has read a question clearly it goes
+into a per-session registry and becomes ground truth — your hand, your
+pen, or a shadow hovering over the printed sheet is never treated as
+evidence the question changed, so the card never flickers or subtly
+rewords itself mid-problem. Cono's reading effort goes into your new
+handwriting, matched against the questions it already knows; a new
+question is registered only when the work can't belong to any known one.
 The **Next** button tells Cono you're moving on: it identifies the next
 problem on the page, gives you a one-line orientation for it, and
 **pins the card there** (marked ⦿) — later re-reads of the page can't
@@ -149,6 +156,10 @@ trip), extended thinking is off — replaced by a one-line visible "tally"
 feedback must agree with — and frames are downscaled to 960 px for
 reading while originals stay on disk. Automatic snaps still never come
 faster than one per 5 s.
+
+And the cone: the little 3D cone in the header (Cono, cone) spins while
+a check or chat reply is being read and rests when the desk is quiet —
+a glanceable "is it thinking" mark, pure inline SVG + CSS.
 
 **Watching where the time goes** (test feature): a small "check stages"
 strip in the side column traces each in-flight check or chat reply

@@ -24,11 +24,14 @@
   line and readability map carry them. CHECK language rules live in
   `../plans/feedback-policy.md` (private repo) — change prompts there
   first, then compile into CHECK_STYLES.
-- The twin state (problem card, per-problem threads + explicit-ask ladder
-  counts, grid, equations) lives in STATE and reaches the browser via
-  /state polls plus /events SSE deltas. Chat is /chat (text + optional
-  pen-point anchor; anchors get a sips full-res crop), Next is /next.
-  Default port is 8764 (variant T installs beside the other variant).
+- The twin state (problem card, question registry STATE.questions —
+  ground truth once registered, occlusion never rewrites it — per-problem
+  threads + explicit-ask ladder counts, Next pin, grid, equations) lives
+  in STATE and reaches the browser via /state polls plus /events SSE
+  deltas. Chat is /chat with semantic anchors ({kind: line|equation|
+  problem|region}; region anchors get a sips full-res crop), Next is
+  /next. Default port is 8764 (variant T installs beside the other
+  variant).
 - Checks remember the page via STATE.last_on_page/last_checks; stuck
   nudges fire after STUCK_S (env CONO_STUCK_S for tests) of quiet.
 - `cono-check doctor` is the preflight; keep it passing after changes.

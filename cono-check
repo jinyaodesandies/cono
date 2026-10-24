@@ -18,7 +18,8 @@ transcribed page, readability map. The twin is also the pointing
 surface: click a transcribed line, a relation, the problem card, or a
 readability cell to anchor a typed question to that exact thing. The
 Next button advances the problem card and pins it there until your
-writing genuinely moves on. Chem/math is typeset (H2O-style subscripts,
+writing genuinely moves on. Questions, once read clearly, live in a
+registry and never reword themselves because a hand covered the sheet. Chem/math is typeset (H2O-style subscripts,
 charges, arrows) everywhere it appears. Replies stream — first text in
 ~1-3 s.
 
@@ -106,7 +107,7 @@ Respond in EXACTLY this plain-text format, no markdown, fields in this exact ord
 
 VISIBILITY: n/10 - one short line: what the camera sees; which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units, exact digits) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
-PROBLEM: the problem the student is currently on, exactly as: <the worksheet's own printed label> | <that question restated in at most 12 words> | <the student's progress on it in at most 8 words, or "not started">. If the page has no labeled problems, invent a short stable label from the content.
+PROBLEM: the problem the student is currently on, exactly as: <the worksheet's own printed label> | <that question restated in at most 12 words> | <the student's progress on it in at most 8 words, or "not started">. If the context lists known questions, match the student's work against them and copy that label and question text EXACTLY as listed, word for word. A hand, pen, shadow, blur, or anything covering printed text is NEVER evidence that a question changed - the printed sheet does not rewrite itself; spend your reading effort on the student's new handwriting instead. Give a label and question that are not in the known list only when the visible work cannot belong to any known question. If the page has no labeled problems, invent a short stable label from the content.
 ON PAGE: the student's handwritten work, line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Do NOT copy printed question text - give each item's printed label, then the handwriting under it; skip items with no handwriting. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
 TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, or recount sig figs - BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok") - the verdict must follow from the two numbers you just wrote: if they differ, it is OFF, no matter what you expected. Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error. Write "none" if no counting is involved.
 CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
@@ -115,7 +116,7 @@ GRID: a readability map of the sheet of paper itself (ignore the desk around it)
 EQUATIONS: ALL the relations that govern the problem in PROBLEM, up to 4 - taken from the page if the student wrote them, otherwise the standard relations the problem needs. One complete relation per line, never truncated, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Never reveal a value or coefficient the student still has to find or fix - put ? in its place (their balancing wrong -> write ?O_2, never the corrected coefficient). Write "none" if none apply."""
 
 CONTEXT_BLOCK = """
-Context from your earlier looks (for WORKING ON, PROBLEM and CHECK only - always transcribe from the image, not from this):
+Context from your earlier looks (for WORKING ON, PROBLEM and CHECK only - always transcribe the student's handwriting from the image, not from this):{questions}
 Current problem: {problem}{pin_note}
 Earlier reading of the student's handwriting:
 {last_on_page}
@@ -147,6 +148,10 @@ NEXT_NOTE = """The student pressed "Next" - they are moving on from {label}. PRO
 
 PIN_NOTE = """
 The student pressed Next and manually advanced to {pin}: keep PROBLEM on {pin} (or a later problem), even though the page's most recent work is on an earlier one - only name an earlier problem again if brand-new handwriting has just appeared on it."""
+
+QUESTIONS_BLOCK = """
+Known questions on this worksheet (ground truth - the printed sheet does not change; copy these word for word, never re-read or reword them):
+{qlist}"""
 
 STYLE_ORDER = ["question", "principle", "point", "next-step"]
 
@@ -213,6 +218,7 @@ class State:
         self.checking_n = 0             # checks in flight (two workers)
         # --- the digital twin ---
         self.problem = None             # {"label","question","progress"} current problem card
+        self.questions = {}             # registry: label -> question text, ground truth once seen
         self.pinned_label = None        # problem the student advanced to with Next (sticks)
         self.pinned_from = None         # ...and the one they left (reject snap-backs to it)
         self.equations = []             # [{"eq","name"}] relations for the current problem
@@ -244,6 +250,7 @@ class State:
                     "grid": self.grid, "grid_snap": self.grid_snap,
                     "grid_time": self.grid_time, "on_page": self.last_on_page,
                     "pinned": self.pinned_label,
+                    "questions": [{"label": k, "question": v} for k, v in self.questions.items()],
                 },
                 "thread": self.thread()[-40:],
                 "asks": self.asks.get(label, 0),
@@ -676,6 +683,8 @@ def build_context():
         return ""
     return CONTEXT_BLOCK.format(
         problem=fmt_problem(STATE.problem),
+        questions=QUESTIONS_BLOCK.format(qlist="\n".join(
+            f"- {k}: {v}" for k, v in STATE.questions.items())) if STATE.questions else "",
         pin_note=PIN_NOTE.format(pin=STATE.pinned_label) if STATE.pinned_label else "",
         last_on_page=STATE.last_on_page[:1200] or "(none yet)",
         last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
@@ -692,24 +701,35 @@ def absorb_twin(entry, snap, next_from=None):
     if entry.get("kind") == "setup":
         return                          # unreadable frame: keep card + equations
     p = entry.get("problem")
+    accepted = True                     # does this check's PROBLEM stand?
     if p and p.get("label"):
-        if next_from and p["label"] != next_from:
+        label = p["label"]
+        if label in STATE.questions:
+            # the registry is ground truth: occlusion or a re-read never
+            # rewords a question we already know (Yao: a hand over the sheet
+            # is not evidence the question changed)
+            p = {**p, "question": STATE.questions[label]}
+        elif p.get("question") and (entry.get("visibility") or 0) >= 5:
+            STATE.questions[label] = p["question"]      # new question discovered
+        if next_from and label != next_from:
             # Next: pin the newly identified problem so routine re-reads of the
             # page (whose freshest work is still the OLD problem) can't snap
             # the card back. The pin dissolves when writing genuinely moves.
-            STATE.pinned_label, STATE.pinned_from = p["label"], next_from
+            STATE.pinned_label, STATE.pinned_from = label, next_from
             STATE.problem = p
         elif STATE.pinned_label and not next_from:
-            if p["label"] == STATE.pinned_label:
+            if label == STATE.pinned_label:
                 STATE.problem = p       # progress on the pinned problem
-            elif p["label"] == STATE.pinned_from:
-                pass                    # snap-back to the problem the student left: ignore
+            elif label == STATE.pinned_from:
+                accepted = False        # snap-back to the problem the student left
             else:                       # writing moved somewhere new: pin dissolves
                 STATE.problem = p
                 STATE.pinned_label = STATE.pinned_from = None
         else:
             STATE.problem = p
-    if entry.get("equations"):
+    # equations describe the check's PROBLEM: a rejected snap-back must not
+    # leave the pinned card wearing the old problem's relations
+    if accepted and entry.get("equations"):
         STATE.equations = entry["equations"]
     if entry.get("on_page"):
         STATE.last_on_page = entry["on_page"]
