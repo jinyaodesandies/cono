@@ -41,15 +41,26 @@ def ensure_deskcap():
     for p in (HERE / "deskcap", HERE.parent / "deskcap" / "deskcap"):
         if p.exists():
             return p
-    if shutil.which("swiftc"):
-        print("building deskcap (first run, ~20 s)…")
-        r = subprocess.run(["swiftc", "-O", "-framework", "AppKit", "-framework", "AVFoundation",
-                            "-framework", "CoreImage", "-framework", "ImageIO",
-                            "-o", str(HERE / "deskcap"), str(HERE / "deskcap.swift")])
-        if r.returncode == 0:
-            return HERE / "deskcap"
-    sys.exit("deskcap is needed for Desk View and couldn't be built. Install the Xcode "
-             "command line tools (xcode-select --install) and rerun.")
+    if not shutil.which("swiftc"):
+        sys.exit("deskcap is needed for Desk View and couldn't be built. Install the Xcode "
+                 "command line tools (xcode-select --install) and rerun.")
+    print("building deskcap (first run, ~20 s)…")
+    tmp = HERE / f".deskcap.build-{os.getpid()}"
+    cmd = ["swiftc", "-O", "-framework", "AppKit", "-framework", "AVFoundation",
+           "-framework", "CoreImage", "-framework", "ImageIO",
+           "-o", str(tmp), str(HERE / "deskcap.swift")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        os.replace(tmp, HERE / "deskcap")        # atomic: a running deskcap keeps its old file
+        return HERE / "deskcap"
+    tmp.unlink(missing_ok=True)
+    err = r.stderr
+    if "redefinition of module 'SwiftBridging'" in err:
+        hint = ("a stale file from an older Command Line Tools install is shadowing the new one; "
+                "remove it: sudo rm /Library/Developer/CommandLineTools/usr/include/swift/module.modulemap")
+    else:
+        hint = "\n".join(l.strip() for l in err.splitlines() if "error:" in l)[:600] or err[-600:]
+    sys.exit(f"deskcap is needed for Desk View and couldn't be built — {hint}")
 
 # server-side gating for replay/deskview (live mode gates in the browser
 # with the same numbers). The live video stream is display-only — Claude
@@ -140,6 +151,9 @@ class State:
         self.snap_n = 0
         self.session_panel = False      # `cono-check session`: open the consent panel
         self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
+        self.cap_waiting = None         # deskview mode: camera missing, deskcap waiting for it
+        self.cap_paused = False         # deskview mode: user paused — deskcap stopped on purpose
+        self.cap_reframing = False      # deskview mode: Apple's Desk View set-up window is open
         self.last_on_page = ""          # page-state memory: latest good transcription
         self.last_checks = []           # ...and the last few notes given (don't repeat)
         self.checking_n = 0             # checks in flight (two workers)
@@ -151,6 +165,8 @@ class State:
                 "frame": self.frame, "frame_n": self.frame_n,
                 "checks": self.checks[:30], "session_panel": self.session_panel,
                 "session_active": SESSION.active, "cap_error": self.cap_error,
+                "cap_waiting": self.cap_waiting, "cap_paused": self.cap_paused,
+                "cap_reframing": self.cap_reframing,
             }
 
 
@@ -260,7 +276,20 @@ class Live:
 
 
 LIVE = Live()
-CAP = {"proc": None, "start": None}     # deskview capture process, restartable
+CAP = {"proc": None, "start": None, "stopping": False, "killed": set()}   # deskview capture process
+
+
+def cap_kill():
+    """Stop the running deskcap on purpose (pause / reconnect) — its watcher
+    must treat this exit as intended, not as a crash to report or relaunch."""
+    proc = CAP["proc"]
+    if proc and proc.poll() is None:
+        CAP["killed"].add(proc.pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def stream_reader(stdout):
@@ -496,6 +525,7 @@ def watcher(log_path, frames_dir):
                 queue_check(row["file"], reason)
                 first_done, dirty, last_queued = True, False, now
             elif stuck_armed and first_done and not dirty \
+                    and not (STATE.cap_paused or STATE.cap_waiting) \
                     and now - max(last_active, last_queued) > STUCK_S:
                 queue_check(row["file"], "stuck?")
                 stuck_armed, last_queued = False, now
@@ -553,11 +583,14 @@ class Handler(BaseHTTPRequestHandler):
             seq = 0
             idle = 0
             try:
-                while idle < 12:                     # give up after ~60 s of no frames
+                while idle < 120:                    # no frame ever: give up after ~10 min
                     jpeg, nseq = LIVE.wait_next(seq)
-                    if nseq == seq or jpeg is None:
+                    if jpeg is None:
                         idle += 1
                         continue
+                    # A camera that has gone away sends nothing; re-sending the last
+                    # frame keeps the browser's stream open (and detects a closed tab)
+                    # so the picture resumes by itself when the camera is back.
                     idle = 0
                     seq = nseq
                     self.wfile.write(b"--conoframe\r\nContent-Type: image/jpeg\r\n"
@@ -657,14 +690,59 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, b"{}", "application/json")
             else:
                 self.send(400, b"no session to delete", "text/plain")
-        elif url.path == "/camera/retry":            # deskview: relaunch deskcap
-            if CAP["start"] and (CAP["proc"] is None or CAP["proc"].poll() is not None):
+        elif url.path == "/camera/retry":            # deskview: (re)launch deskcap — Continue / Reconnect / Skip set-up
+            if CAP["start"]:
+                setup = CAP.get("setup")
+                if setup and setup.poll() is None:
+                    CAP["setup_cancelled"] = True
+                    setup.terminate()
+                cap_kill()
                 with STATE.lock:
                     STATE.cap_error = None
+                    STATE.cap_waiting = None
+                    STATE.cap_paused = False
                 CAP["proc"] = CAP["start"]()
                 self.send(200, b"{}", "application/json")
             else:
                 self.send(400, b"camera not restartable", "text/plain")
+        elif url.path == "/camera/reframe":          # deskview: re-frame the desk crop in Apple's Desk View
+            if CAP["start"] and CAP.get("bin") and not STATE.cap_reframing:
+                cap_kill()                           # Desk View set-up wants the camera to itself
+                with STATE.lock:
+                    STATE.cap_reframing = True
+                    STATE.cap_error = None
+                    STATE.cap_waiting = None
+
+                def reframe():
+                    setup = CAP["setup"] = subprocess.Popen([CAP["bin"], "--setup"], stdout=subprocess.DEVNULL,
+                                                            stderr=subprocess.PIPE, text=True)
+                    _, errs = setup.communicate()
+                    cancelled = CAP.pop("setup_cancelled", False)   # user hit Skip: retry already relaunched
+                    with STATE.lock:
+                        STATE.cap_reframing = False
+                    if cancelled:
+                        return
+                    err = next((l for l in reversed(errs.splitlines()) if "deskcap:" in l), "")
+                    print("desk view set-up " + ("done" if setup.returncode == 0 else f"failed: {err}"))
+                    with STATE.lock:
+                        if setup.returncode:
+                            STATE.cap_error = err or "Desk View set-up didn't finish."
+                    if not CAP["stopping"] and not STATE.cap_paused and not setup.returncode:
+                        CAP["proc"] = CAP["start"]()
+                threading.Thread(target=reframe, daemon=True).start()
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"not in Desk View mode", "text/plain")
+        elif url.path == "/camera/pause":            # deskview: stop deskcap until Continue
+            if CAP["start"]:
+                cap_kill()
+                with STATE.lock:
+                    STATE.cap_error = None
+                    STATE.cap_waiting = None
+                    STATE.cap_paused = True
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"camera not pausable", "text/plain")
         elif url.path == "/retry":                   # re-run a failed check
             name = Path(q.get("snap", [""])[0]).name
             if (self.frames_dir / name).exists():
@@ -702,11 +780,21 @@ def doctor():
         row(True, "deskcap capture tool ready")
     except SystemExit as e:
         row(False, "deskcap capture tool ready", str(e))
+    listing = None
     if bin_:
-        r = subprocess.run([str(bin_), "--list"], capture_output=True, text=True, timeout=20)
-        has_dv = "deskviewcamera" in (r.stdout + r.stderr).lower()
+        lp = subprocess.Popen([str(bin_), "--list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            listing = "".join(lp.communicate(timeout=20))
+        except subprocess.TimeoutExpired:
+            lp.kill()                                # don't wait: a wedged camera client may never exit
+            row(False, "camera system responding",
+                "listing cameras hung — the macOS camera service is wedged; quit other camera apps, "
+                "unplug/re-lock the iPhone, and if it persists restart the Mac")
+    if listing is not None:
+        has_dv = "deskviewcamera" in listing.lower()
         row(has_dv, "Desk View camera present",
-            "needs an M4-or-later Mac — use plain `cono-check` with an iPhone or webcam instead")
+            "needs an M4-or-later Mac, or an iPhone 11+ mounted on the lid via Continuity Camera "
+            "(locked, same Apple ID, Bluetooth on) — otherwise use `cono-check browser`")
         with tempfile.TemporaryDirectory() as td:
             p = subprocess.Popen([str(bin_), "--device", "deskview" if has_dv else "default",
                                   "--interval", "1", "--count", "1", "--out", td],
@@ -770,6 +858,7 @@ def main():
         threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
     elif deskview:
         deskcap_bin = os.environ.get("CONO_DESKCAP") or str(ensure_deskcap())
+        CAP["bin"] = deskcap_bin
 
         def start_cap():
             proc = subprocess.Popen(
@@ -780,13 +869,33 @@ def main():
             threading.Thread(target=stream_reader, args=(proc.stdout,), daemon=True).start()
 
             def cap_watch():
-                lines = [l.decode(errors="replace").strip() for l in proc.stderr if l.strip()]
+                lines = []
+                for raw in proc.stderr:
+                    l = raw.decode(errors="replace").strip()
+                    if not l:
+                        continue
+                    lines.append(l)
+                    if "deskcap status:" in l:        # waiting … | lost … | live
+                        msg = l.split("deskcap status:", 1)[1].strip()
+                        with STATE.lock:
+                            STATE.cap_waiting = None if msg == "live" else msg
+                        print("camera " + ("back" if msg == "live" else msg.split(" — ")[0]))
                 proc.wait()
+                if CAP["stopping"] or proc.pid in CAP["killed"]:
+                    CAP["killed"].discard(proc.pid)
+                    return
                 err = next((l for l in reversed(lines) if "deskcap:" in l), "")
                 with STATE.lock:
+                    STATE.cap_waiting = None
                     STATE.cap_error = err or \
                         "The Desk View camera stopped — it may be in use by another app."
                 print(f"deskcap exited: {STATE.cap_error}")
+                if "permission denied" not in err:  # anything else is worth another try
+                    time.sleep(3)
+                    if not CAP["stopping"] and CAP["proc"] is proc:
+                        with STATE.lock:
+                            STATE.cap_error = None
+                        CAP["proc"] = start_cap()
             threading.Thread(target=cap_watch, daemon=True).start()
             return proc
 
@@ -800,6 +909,7 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
     def stop(*_):
+        CAP["stopping"] = True
         if CAP["proc"]:
             CAP["proc"].terminate()
         elif cap:

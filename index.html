@@ -335,6 +335,7 @@
     <div class="controls">
       <button class="pill" id="checknow" type="button" disabled>Check now</button>
       <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
+      <button class="quiet" id="reframebtn" type="button" hidden>Re-frame Desk View</button>
       <button class="quiet" id="sessionbtn" type="button" hidden>Record a 10-minute session</button>
       <button class="quiet" id="endbtn" type="button" hidden>End session</button>
       <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
@@ -429,10 +430,10 @@
     fillPicker();
   }
 
-  function showOffline([head, body], retryFn) {
+  function showOffline([head, body], retryFn, label = "Try again") {
     const o = el("offline");
     o.innerHTML = `<h2>${esc(head)}</h2><p>${esc(body)}</p>` +
-                  (retryFn ? `<button class="pill" id="retrycam" type="button">Try again</button>` : "");
+                  (retryFn ? `<button class="pill" id="retrycam" type="button">${esc(label)}</button>` : "");
     o.style.display = "block";
     el("video").hidden = true;
     if (retryFn) el("retrycam").onclick = retryFn;
@@ -457,9 +458,61 @@
 
   function stopTracks() { stream?.getTracks().forEach(t => t.stop()); stream = null; }
 
+  // Desk View: pausing stops the capture tool; Continue (or Reconnect, while
+  // the camera is away) launches a fresh one, which also re-discovers the iPhone.
+  async function pauseDeskView() {
+    const r = await fetch("/camera/pause", { method: "POST" });
+    if (!r.ok) { paused = false; return; }
+    if (streamImg) streamImg.hidden = true;
+    document.body.classList.add("paused");
+    el("pausebtn").textContent = "Continue";
+    el("pausebtn").className = "pill resume";
+    showOffline(["Paused — the Desk View camera is off.",
+      "Nothing is watched or sent. Hit Continue to pick up where you left off."], resumeDeskView, "Continue");
+    el("caption").textContent = "";
+    setStatus();
+  }
+  async function resumeDeskView() {
+    const r = await fetch("/camera/retry", { method: "POST" });
+    if (!r.ok) return;
+    paused = false;
+    poll.capErrShown = false;
+    camWaiting = false;
+    document.body.classList.remove("paused");
+    el("pausebtn").textContent = "Pause camera";
+    el("pausebtn").className = "quiet";
+    showOffline(["Connecting to the Desk View camera…", "Lock your iPhone and set it on the lid, rear cameras facing you."]);
+    camRefresh = true;          // next /state decides: live picture, or still waiting
+    setStatus();
+  }
+
+  // Apple's Desk View app owns the desk crop. Re-framing opens it in set-up mode
+  // (full ultra-wide view + the trapezoid that becomes the frame); capture
+  // resumes by itself once the user starts Desk View from that window.
+  let camReframing = false;
+  el("reframebtn").addEventListener("click", async () => {
+    if (camBusy || camReframing) return;
+    const r = await fetch("/camera/reframe", { method: "POST" });
+    if (!r.ok) return;
+    camReframing = true;
+    sessionEvent("reframe");
+    if (streamImg) streamImg.hidden = true;
+    showOffline(["Re-framing in Apple's Desk View window.",
+      "Drag the corners of the trapezoid around your page, then click Start Desk View. " +
+      "Cono picks up the new framing by itself."], () => { camReframing = false; resumeDeskView(); }, "Skip");
+    el("caption").textContent = "";
+  });
+
+  let camBusy = false;          // one pause/continue request at a time (a double-click must not undo itself)
   el("pausebtn").addEventListener("click", () => {
+    if (camBusy) return;
     paused = !paused;
     if (session) { session.paused = paused; sessionEvent(paused ? "pause" : "resume"); }
+    if (mode === "deskview") {
+      camBusy = true;
+      (paused ? pauseDeskView() : resumeDeskView()).finally(() => { camBusy = false; });
+      return;
+    }
     if (paused) {
       stopTracks();
       document.body.classList.add("paused");
@@ -546,17 +599,46 @@
 
   // ---------- deskview live stream ----------
   let streamFailed = false;
+  let streamImg = null;
   function startStream() {
-    const img = document.createElement("img");
+    if (streamImg) streamImg.remove();
+    const img = streamImg = document.createElement("img");
     img.className = "replay under";
     img.alt = "Live Desk View of the page";
     img.src = "/stream";
     img.onerror = () => {         // stream unavailable: fall back to ~1/s frame polling
       img.remove();
+      if (streamImg === img) streamImg = null;
       streamFailed = true;
       lastFrameN = -1;
     };
     el("framewrap").prepend(img);
+  }
+
+  // The Desk View camera comes and goes with the iPhone (unlocked, picked up,
+  // wandered off). deskcap waits and reattaches; the page just says so and
+  // brings the picture back when frames resume.
+  const DESKVIEW_CAPTION = "Live from the Desk View camera. Only the snapshots on the right are read by Claude.";
+  let camWaiting = false;
+  let camRefresh = false;
+  function showCamWaiting(msg) {
+    if (!camWaiting) sessionEvent("camera_lost");
+    camWaiting = true;
+    if (streamImg) streamImg.hidden = true;
+    const lost = /^lost/.test(msg || "");
+    showOffline([lost ? "The Desk View camera dropped out." : "Waiting for the Desk View camera.",
+      "Lock your iPhone and set it back on the lid, rear cameras facing you — Cono picks " +
+      "up again by itself, or hit Reconnect to look for it now. (No iPhone handy? Restart as `cono-check browser`.)"],
+      resumeDeskView, "Reconnect");
+    el("caption").textContent = "";
+  }
+  function showCamBack() {
+    camWaiting = false;
+    camRefresh = false;
+    el("offline").style.display = "none";
+    el("caption").textContent = DESKVIEW_CAPTION;
+    if (streamFailed || !streamImg) { streamFailed = false; startStream(); }
+    else streamImg.hidden = false;
   }
 
   // ---------- replay mode stage ----------
@@ -822,7 +904,9 @@
         startCamera().then(() => { if (s.session_panel) showConsent(); });
       } else if (mode === "deskview") {
         el("sessionbtn").hidden = false;
-        el("caption").textContent = "Live from the Desk View camera. Only the snapshots on the right are read by Claude.";
+        el("pausebtn").hidden = false;
+        el("reframebtn").hidden = false;
+        el("caption").textContent = DESKVIEW_CAPTION;
         el("checknow").disabled = false;
         startStream();
         if (s.session_panel) showConsent();
@@ -836,7 +920,21 @@
       if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
     }
     if (mode !== "live" && s.status === "watching") manualPending = false;
-    if (mode === "deskview" && s.cap_error && !poll.capErrShown) {
+    if (mode === "deskview" && camReframing && !s.cap_reframing) {   // set-up window closed
+      camReframing = false;
+      camRefresh = true;
+      if (!s.cap_error && !s.cap_waiting) showCamBack();
+    }
+    if (mode === "deskview" && !s.cap_error && !paused && !camReframing) {
+      if (s.cap_waiting && (!camWaiting || camRefresh)) showCamWaiting(s.cap_waiting);
+      else if (!s.cap_waiting && (camWaiting || camRefresh)) showCamBack();
+      camRefresh = false;
+    }
+    if (mode === "deskview" && !s.cap_error && !paused && poll.capErrShown) {   // server relaunched deskcap itself
+      poll.capErrShown = false;
+      showCamBack();
+    }
+    if (mode === "deskview" && s.cap_error && !paused && !poll.capErrShown) {
       poll.capErrShown = true;
       showOffline(["The Desk View camera couldn't run.",
         s.cap_error + " Close other camera apps, or allow camera access for your " +
@@ -846,8 +944,9 @@
           const r = await fetch("/camera/retry", { method: "POST" });
           if (r.ok) {
             poll.capErrShown = false;
+            camWaiting = false;
             el("offline").style.display = "none";
-            el("caption").textContent = "Live from the Desk View camera. Only the snapshots on the right are read by Claude.";
+            el("caption").textContent = DESKVIEW_CAPTION;
             startStream();
           }
         });

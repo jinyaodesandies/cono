@@ -41,9 +41,19 @@ you naturally write — Cono looks at your desk, not at you.
 Browsers can't open that camera, so this mode captures through `deskcap`,
 a small Swift tool that builds itself from the bundled source on first
 run (needs the Xcode command line tools: `xcode-select --install`), and
-your terminal app needs camera permission — macOS asks once. The page
+your terminal app needs camera permission — macOS asks once. If the build
+fails, `cono-check doctor` prints the compiler's actual complaint and the
+fix — usually a stale file left behind by an older Command Line Tools
+install. The page
 shows live video streamed from the tool, so framing the page is easy —
-the video is display-only and never leaves your machine.
+the video is display-only and never leaves your machine. An iPhone Desk
+View drops out whenever the phone is unlocked or picked up; Cono says so
+over the video and picks up again by itself once the phone is locked and
+back on the lid — no restart needed. A Reconnect button on that notice
+relaunches the capture if you'd rather not wait. "Re-frame Desk View"
+opens Apple's Desk View window in its set-up mode — drag the trapezoid
+around your page and start Desk View — and Cono resumes with the new
+crop; macOS owns that framing, so this is also the way to reset it.
 
 **Browser mode** (`cono-check browser`) is the fallback for Macs without
 Desk View — it works with any camera the browser can see:
@@ -53,8 +63,9 @@ menu under the video. If the picture keeps cropping to your face, turn
 off Center Stage in Control Center → Video Effects.
 
 Either way: when you pause writing, Cono snaps one frame and checks it.
-There's a "Check now" button when you don't want to wait, and in browser
-mode a "Pause camera" button that turns the camera fully off.
+There's a "Check now" button when you don't want to wait, and a "Pause
+camera" button that turns the camera fully off — in Desk View mode it
+stops the capture tool, and Continue starts it again.
 
 Before taking it somewhere that matters (class, a tutoring session),
 run `cono-check doctor` — a ten-second preflight that verifies the
