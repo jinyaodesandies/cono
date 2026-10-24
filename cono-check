@@ -32,17 +32,22 @@ Usage:
   cono-check --model opus        # pick the model (default: sonnet)
   cono-check --replay DIR        # replay any recorded session directory
   cono-check --port 9000         # serve somewhere else (default: 8764)
-  cono-check --no-contrast       # don't contrast-normalize snaps before reading
+  cono-check --contrast strong   # writing clarity: off | auto (default) | strong
+  cono-check --no-contrast       # same as --contrast off
   cono-check --no-open           # don't open the browser automatically
 Ctrl-C to stop.
 
-Snaps get automatic contrast normalization (histogram stretch) before the
-model reads them - a near-no-op on well-lit pages, a real lift on faint
-pencil. Browser snaps are stretched on the canvas before upload; deskview/
-replay frames are stretched in place server-side when Pillow is installed
-(optional - everything works without it). The stored snap, the thumbnail,
-and what the model reads are always the same pixels. Toggle live with the
-"auto contrast" button under the camera, or start with --no-contrast.
+Snaps get a writing-clarity pass before the model reads them. "auto"
+(default) is a global histogram stretch - near-no-op on well-lit pages, a
+lift on faint pencil. "strong" goes after faint strokes: flatten uneven
+lighting (subtract a blurred background), stretch the flattened contrast,
+gamma mid-gray graphite toward black, lightly sharpen stroke edges
+(grayscale output). Browser snaps are processed on the canvas before
+upload; deskview/replay frames in place server-side when Pillow is
+installed (optional - everything works without it). The stored snap, the
+thumbnail, and what the model reads are always the same pixels; each
+check logs which pass its snap got. Switch mid-session with the "writing
+clarity" button under the camera, or start with --contrast MODE.
 
 Test feature: a "check stages" strip in the side column traces each
 in-flight check/chat through the real pipeline stages (contrast, sent,
@@ -230,8 +235,8 @@ class State:
         self.next_from = None           # label the student pressed Next on (consumed by next check)
         self.latest_img = None          # newest stored image filename (chat reads this)
         self.msg_id = 0                 # ids for checks + chat messages (SSE correlation)
-        self.contrast = True            # auto contrast normalization on snaps
-        self.snap_enh = {}              # live mode: snap name -> client applied contrast
+        self.contrast = "auto"          # writing clarity on snaps: off | auto | strong
+        self.snap_enh = {}              # live mode: snap name -> pass the browser applied
 
     def thread(self):
         label = (self.problem or {}).get("label")
@@ -547,31 +552,60 @@ def parse_report(text, partial=False):
     return out
 
 
-ENHANCED = set()                        # snap paths already contrast-stretched
+ENHANCED = {}                           # snap path -> tag of the pass already applied
 
 
-def enhance_snap(path):
-    """Contrast-normalize a stored snap IN PLACE (histogram stretch, clipping
-    1% at each end) so the thumbnail, the session copy, and what the model
-    reads are the same pixels. Near-no-op on well-lit pages, a real lift on
-    faint pencil. Pillow-if-present only — without it this is a clean skip
-    (live-mode snaps are stretched in the browser canvas instead and never
-    come through here). Returns True if the file was changed."""
-    if not PIL_OK:
-        return False
+def clarify_strong(im):
+    """The 'strong' writing-clarity pass, tuned for faint strokes:
+    1. flatten uneven lighting — subtract a heavily blurred copy of the
+       luminance (page-curvature shading and lamp falloff cancel out, so a
+       later stretch amplifies ink, not shadows);
+    2. histogram-stretch the flattened image (1% clip per end — faint
+       graphite gets the full range, and because shading is already gone
+       this can't turn shadows into black blobs);
+    3. gamma 1.6 — mid-gray strokes darken toward black, paper stays bright;
+    4. mild unsharp (r2, 80%, threshold 3) — crisper stroke edges, the
+       threshold keeps paper grain from haloing.
+    Output is grayscale: for reading handwriting, color is noise."""
+    from PIL import ImageChops, ImageFilter
+    lum = im.convert("L")
+    bg = lum.filter(ImageFilter.GaussianBlur(radius=max(lum.size) // 40))
+    flat = ImageChops.subtract(lum, bg, scale=1.0, offset=215)
+    # clip 8% at the bright end: the page-border glow the subtraction creates
+    # must not hog the range — paper itself should land near white
+    flat = _PILImageOps.autocontrast(flat, cutoff=(1, 8))
+    gamma = flat.point([min(255, round((v / 255) ** 1.6 * 255)) for v in range(256)])
+    sharp = gamma.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+    return sharp.convert("RGB")
+
+
+def enhance_snap(path, mode):
+    """Clarity-process a stored snap IN PLACE so the thumbnail, the session
+    copy, and what the model reads are the same pixels. mode: "auto" =
+    global histogram stretch (near-no-op on good light, a lift on faint
+    pencil), "strong" = clarify_strong above. Pillow-if-present only —
+    without it this is a clean skip (live-mode snaps are processed on the
+    browser canvas instead and never come through here). Returns the tag
+    of the applied pass, or None."""
+    if not PIL_OK or mode not in ("auto", "strong"):
+        return None
+    tag = f"pillow-{mode}"
     with STATE.lock:
         if path in ENHANCED:
-            return True
-        ENHANCED.add(path)
+            return ENHANCED[path]       # never double-process one frame
+        ENHANCED[path] = tag
     try:
         im = _PILImage.open(path)
         im = _PILImageOps.exif_transpose(im)
-        out = _PILImageOps.autocontrast(im.convert("RGB"), cutoff=1)
+        out = clarify_strong(im) if mode == "strong" else \
+            _PILImageOps.autocontrast(im.convert("RGB"), cutoff=1)
         out.save(path, "JPEG", quality=88)
-        return True
+        return tag
     except Exception as e:
         print(f"contrast skip ({Path(path).name}): {e}")
-        return False
+        with STATE.lock:
+            ENHANCED.pop(path, None)
+        return None
 
 
 def shrink_for_model(path, width=1280):
@@ -781,14 +815,14 @@ def checker(frames_dir):
                             working_on=p["working_on"])
         try:
             with STATE.lock:
-                contrast_on, mode = STATE.contrast, STATE.mode
-                client_enh = STATE.snap_enh.get(snap, False)
-            if not contrast_on:
+                cmode, mode = STATE.contrast, STATE.mode
+                client_enh = STATE.snap_enh.get(snap)
+            if cmode == "off":
                 entry["contrast"] = "off"
-            elif mode == "live":        # browser stretched it on the canvas pre-upload
-                entry["contrast"] = "canvas" if client_enh else "skip"
-            else:                       # deskview/replay: stretch the stored file itself
-                entry["contrast"] = "pillow" if enhance_snap(frames_dir / snap) else "skip"
+            elif mode == "live":        # browser processed it on the canvas pre-upload
+                entry["contrast"] = f"canvas-{client_enh}" if client_enh else "skip"
+            else:                       # deskview/replay: process the stored file itself
+                entry["contrast"] = enhance_snap(frames_dir / snap, cmode) or "skip"
             st.hit("contrast")
             send = shrink_for_model(frames_dir / snap, cfg["width"])
             st.hit("sent")
@@ -1088,11 +1122,12 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.snap_n += 1
                 name = f"snap-{STATE.snap_n:04d}.jpg"
                 STATE.latest_img = name
-                STATE.snap_enh[name] = q.get("enh", ["0"])[0] == "1"
+                enh = q.get("enh", ["0"])[0]
+                STATE.snap_enh[name] = enh if enh in ("auto", "strong") else None
             (self.frames_dir / name).write_bytes(body)
             if SESSION.active:
                 SESSION.event("snap_sent", id=name, reason=q.get("reason", [""])[0],
-                              enh=q.get("enh", ["0"])[0] == "1")
+                              enh=STATE.snap_enh.get(name))
             if q.get("store", ["0"])[0] != "1":      # store=1: freshen only (for chat)
                 queue_check(name, q.get("reason", ["page settled"])[0])
             self.send(200, json.dumps({"id": name}).encode(), "application/json")
@@ -1126,13 +1161,15 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=run_chat, args=(cid, text, anchor, self.frames_dir),
                              daemon=True).start()
             self.send(200, json.dumps({"id": cid}).encode(), "application/json")
-        elif url.path == "/contrast":                # toggle auto contrast on snaps
+        elif url.path == "/contrast":                # writing clarity: off/auto/strong
             data = json.loads(self.body() or b"{}")
+            mode = data.get("mode")
+            if mode not in ("off", "auto", "strong"):   # legacy {"on": bool}
+                mode = "auto" if data.get("on", True) else "off"
             with STATE.lock:
-                STATE.contrast = bool(data.get("on", True))
-                on = STATE.contrast
-            SESSION.event("contrast_set", on=on)
-            self.send(200, json.dumps({"on": on}).encode(), "application/json")
+                STATE.contrast = mode
+            SESSION.event("contrast_set", mode=mode)
+            self.send(200, json.dumps({"mode": mode}).encode(), "application/json")
         elif url.path == "/next":                    # problem card: Next button
             with STATE.lock:
                 label = (STATE.problem or {}).get("label") or "the current problem"
@@ -1285,8 +1322,16 @@ def main():
     open_browser = "--no-open" not in args
     if "--no-contrast" in args:
         with STATE.lock:
-            STATE.contrast = False
+            STATE.contrast = "off"
     args = [a for a in args if a not in ("--no-open", "--no-contrast")]
+    if "--contrast" in args:
+        i = args.index("--contrast")
+        v = args[i + 1]
+        if v not in ("off", "auto", "strong"):
+            sys.exit("--contrast takes off, auto, or strong")
+        with STATE.lock:
+            STATE.contrast = v
+        del args[i:i + 2]
     for flag, cast in (("--model", str), ("--port", int), ("--replay", str)):
         if flag in args:
             i = args.index(flag)
