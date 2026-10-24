@@ -34,8 +34,19 @@ Usage:
   cono-check --contrast strong   # writing clarity: off | auto (default) | strong
   cono-check --no-contrast       # same as --contrast off
   cono-check --no-record         # testdev opt-out: run live without recording
+  cono-check --dev               # start in dev mode (show instrumentation)
   cono-check --no-open           # don't open the browser automatically
 Ctrl-C to stop.
+
+STUDY vs DEV. The page opens in study mode: just the twin — problem card,
+relations, page, map, dialogue, cone — with automatic defaults. The quiet
+"dev" switch (or --dev) reveals the instrumentation together: stage
+trace, writing-clarity cycler, per-check latency and clarity tags, the
+bundle path. Modes change only what is SHOWN; recording and per-check
+metadata never stop. An always-reachable "Suggest an improvement" box
+(both modes) appends each suggestion, timestamped with its context
+(problem, last check, frame, mode/config), to the session bundle and to
+~/deskcap/suggestions.jsonl, which accumulates across sessions.
 
 TESTDEV MODE - every live run records. From launch until "End & rate"
 (or the server stops), each live run (deskview or browser) saves a full
@@ -59,7 +70,7 @@ upload; deskview/replay frames in place server-side when Pillow is
 installed (optional - everything works without it). The stored snap, the
 thumbnail, and what the model reads are always the same pixels; each
 check logs which pass its snap got. Switch mid-session with the "writing
-clarity" button under the camera, or start with --contrast MODE.
+clarity" button (dev mode), or start with --contrast MODE.
 
 Test feature: a "check stages" strip in the side column traces each
 in-flight check/chat through the real pipeline stages (contrast, sent,
@@ -229,6 +240,7 @@ class State:
         self.check_asap = False         # replay mode: Check now button
         self.snap_n = 0
         self.record = True              # testdev: live modes record unless --no-record
+        self.dev = False                # dev mode: show instrumentation (logging never stops)
         self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
         self.last_on_page = ""          # page-state memory: latest good transcription
         self.last_checks = []           # ...and the last few notes given (don't repeat)
@@ -263,7 +275,8 @@ class State:
                 "checks": self.checks[:30],
                 "session_active": SESSION.active, "cap_error": self.cap_error,
                 "session_ms": SESSION.t() if SESSION.active else 0,
-                "record": self.record,
+                "session_path": str(SESSION.dir) if SESSION.active else None,
+                "record": self.record, "dev": self.dev,
                 "twin": {
                     "problem": self.problem, "equations": self.equations,
                     "grid": self.grid, "grid_snap": self.grid_snap,
@@ -898,6 +911,7 @@ def checker(frames_dir):
         st.hit("done")
         entry["stages"] = st.list
         latency = int((time.time() - t0) * 1000)
+        entry["ms"] = latency           # dev mode shows per-check latency
         first_ms = int(first * 1000) if first else None
         print(f"check {snap} ({reason}): first text "
               f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")
@@ -1213,6 +1227,34 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.contrast = mode
             SESSION.event("contrast_set", mode=mode)
             self.send(200, json.dumps({"mode": mode}).encode(), "application/json")
+        elif url.path == "/dev":                     # study <-> dev mode (display only)
+            data = json.loads(self.body() or b"{}")
+            with STATE.lock:
+                STATE.dev = bool(data.get("on"))
+                on = STATE.dev
+            SESSION.event("dev_set", on=on)
+            self.send(200, json.dumps({"on": on}).encode(), "application/json")
+        elif url.path == "/suggest":                 # improvement suggestion, with context
+            data = json.loads(self.body() or b"{}")
+            text = (data.get("text") or "").strip()[:1000]
+            if not text:
+                return self.send(400, b"empty suggestion", "text/plain")
+            with STATE.lock:
+                last = STATE.checks[0] if STATE.checks else {}
+                ctx = {"problem": STATE.problem, "last_check_id": last.get("id"),
+                       "snap": last.get("snap"), "frame": STATE.latest_img or STATE.frame,
+                       "mode": STATE.mode, "model": STATE.model,
+                       "contrast": STATE.contrast, "dev": STATE.dev}
+            rec = {"ts": datetime.now().isoformat(timespec="seconds"), "text": text,
+                   "session": str(SESSION.dir) if SESSION.active else None,
+                   "t_ms": SESSION.t() if SESSION.active else None, **ctx}
+            jl = Path.home() / "deskcap" / "suggestions.jsonl"   # survives any one bundle
+            jl.parent.mkdir(parents=True, exist_ok=True)
+            with open(jl, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+            SESSION.event("suggestion", **{k: v for k, v in rec.items() if k != "session"})
+            print(f"suggestion: {text[:80]}")
+            self.send(200, b"{}", "application/json")
         elif url.path == "/next":                    # problem card: Next button
             with STATE.lock:
                 label = (STATE.problem or {}).get("label") or "the current problem"
@@ -1388,6 +1430,10 @@ def main():
         args.remove("--no-record")
         with STATE.lock:
             STATE.record = False
+    if "--dev" in args:
+        args.remove("--dev")
+        with STATE.lock:
+            STATE.dev = True
     if "demo" in args:
         replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
     if "session" in args:               # no-op alias from the 10-minute era

@@ -355,6 +355,21 @@
   @media (prefers-reduced-motion: reduce) { .stagechip.cur { animation: none; } }
 
   details.older summary { cursor: pointer; color: var(--faded); font-size: 13.5px; padding: 4px 0; }
+  .suggestrow { display: flex; gap: 8px; margin: 8px 0; }
+  .suggestrow input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--paper);
+    font: inherit;
+    font-size: 13.5px;
+    padding: 6px 14px;
+  }
+  .suggestrow input:focus { outline: none; border-color: var(--lamp); }
+  #suggestlog { color: var(--faded); font-size: 12.5px; }
+  #suggestlog div { padding: 2px 0; }
+  #suggestlog .ok { color: var(--leaf); }
   .hist { border-top: 1px solid var(--line); padding: 10px 0; }
   .hist .meta { display: flex; align-items: center; gap: 10px; color: var(--faded); font-size: 12.5px; margin-bottom: 4px; }
   .hist .meta img { height: 32px; border-radius: 3px; display: block; }
@@ -455,13 +470,13 @@
     </div>
     <div class="dialogue" id="dialogue">
       <p class="empty" id="empty">Lay your page flat under the camera and start working.
-      When you pause writing, Cono reads the page from the desk and its notes land here —
-      it points at mistakes and asks a question first; it won’t blurt the answer.</p>
+      When you pause, Cono reads the desk and leaves a note here — a pointer and a
+      question, never the blurted answer.</p>
     </div>
     <div class="quietline" id="quietline" hidden></div>
     <form class="askrow" id="askform">
       <button class="anchortag" id="anchortag" type="button" hidden title="Clear the pointed spot"></button>
-      <input id="chatbox" autocomplete="off" placeholder="Ask about this problem — or click a line, relation, or map cell to point at it">
+      <input id="chatbox" autocomplete="off" placeholder="Ask — or click a line or relation above to point at it">
       <button class="pill" id="sendbtn" type="submit">Ask</button>
     </form>
   </section>
@@ -485,6 +500,8 @@
           title="Test feature: live trace of which stage of the reading a check is in">stage trace: on</button>
         <button class="quiet" id="endbtn" type="button" hidden>End &amp; rate</button>
         <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
+        <button class="quiet" id="devbtn" type="button" hidden
+          title="Show the test instrumentation (stage trace, clarity control, latency tags)">dev</button>
       </div>
       <div id="sessionpanel" hidden></div>
     </figure>
@@ -497,9 +514,9 @@
       </div>
       <div class="mapbody">
         <div id="rmap" role="img" aria-label="Map of which parts of the page could be read"></div>
-        <span class="maplegend"><span class="lg read"></span>could read ·
-          <span class="lg cant"></span>couldn’t read · dark = blank paper.<br>
-          Click a cell to ask about that spot.<br><span class="maptime" id="maptime"></span></span>
+        <span class="maplegend"><span class="lg read"></span>read ·
+          <span class="lg cant"></span>can’t read · dark = blank.<br>
+          Click a cell to ask about it.<br><span class="maptime" id="maptime"></span></span>
       </div>
     </div>
     <div class="stagebox" id="stagebox" hidden>
@@ -515,6 +532,15 @@
     <details class="older" id="historybox" hidden>
       <summary id="historysum">earlier notes</summary>
       <div id="history"></div>
+    </details>
+
+    <details class="older suggestbox" id="suggestbox">
+      <summary>Suggest an improvement</summary>
+      <form class="suggestrow" id="suggestform">
+        <input id="suggestinput" autocomplete="off" placeholder="What should work better?">
+        <button class="pill small" type="submit">Send</button>
+      </form>
+      <div id="suggestlog"></div>
     </details>
   </aside>
 </main>
@@ -548,6 +574,7 @@
   let liveChat = null;        // {id, text} streaming chat reply via SSE
   let chatWaiting = false;
   let contrastMode = "auto";  // writing clarity on snaps: off|auto|strong (server holds the truth)
+  let devMode = false;        // study mode (default) hides instrumentation; logging never stops
   let stageTrace = localStorage.getItem("cono-stagetrace") !== "off";
   let stageRun = null;        // test feature: {kind, id, stages:[{stage,ms}], start, done}
 
@@ -1001,7 +1028,7 @@
     else if (liveChat)
       html += `<div class="msg cono live"><span class="mtext">${chemHTML(liveChat.text)}</span></div>`;
     else if (chatWaiting)
-      html += `<div class="pendingline"><span class="lampdot checking"></span>thinking…</div>`;
+      html += `<div class="pendingline"><span class="lampdot checking"></span>reading…</div>`;
     pending.forEach(p => {
       if (liveCheck) return;            // streaming text already shows progress
       const sec = Math.round((Date.now() - p.at) / 1000);
@@ -1034,7 +1061,7 @@
       return `<div class="hist"><div class="meta"><span>${esc(c.time)} · ${esc((c.check || c.visibility_note || "").slice(0, 120))}</span></div></div>`;
     const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img src="/snap/${esc(c.snap)}" alt="snapshot"></a>` : "";
     return `<div class="hist ${esc(c.kind || "")}">
-      <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}${c.problem_label ? " · " + esc(c.problem_label) : ""}</span></div>
+      <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}${c.problem_label ? " · " + esc(c.problem_label) : ""}${devMode && c.ms ? " · " + (c.ms / 1000).toFixed(1) + "s" : ""}${devMode && c.contrast ? " · " + esc(c.contrast) : ""}</span></div>
       <p class="say">${chemHTML(c.check || "")}</p>
       <details class="read"><summary>what I read</summary><div class="onpage">${chemHTML(c.on_page || "(nothing)")}</div></details>
       ${c.failed ? `<p><button class="retry" data-snap="${esc(c.snap)}">Retry</button></p>` : ""}
@@ -1044,7 +1071,7 @@
   function renderHistory(checks) {
     if (!checks.length) return;
     el("historybox").hidden = false;
-    el("historysum").textContent = `${checks.length} ${checks.length === 1 ? "note" : "notes"} so far — every snapshot read`;
+    el("historysum").textContent = `earlier notes (${checks.length})`;
     el("history").innerHTML = checks.map(histHTML).join("");
     el("history").querySelectorAll(".retry").forEach(b =>
       b.addEventListener("click", () => fetch("/retry?snap=" + encodeURIComponent(b.dataset.snap), { method: "POST" })));
@@ -1068,7 +1095,7 @@
   function clearAnchor() {
     anchor = null;
     el("anchortag").hidden = true;
-    el("chatbox").placeholder = "Ask about this problem — or click a line, relation, or map cell to point at it";
+    el("chatbox").placeholder = "Ask — or click a line or relation above to point at it";
     document.querySelectorAll(".anchored").forEach(d => d.classList.remove("anchored"));
   }
   el("anchortag").addEventListener("click", clearAnchor);
@@ -1120,12 +1147,39 @@
   function renderContrast(s) {
     contrastMode = ["off", "auto", "strong"].includes(s.contrast) ? s.contrast : "auto";
     const b = el("contrastbtn");
-    b.hidden = !mode;
+    b.hidden = !mode || !devMode;       // study mode: automatic defaults, no knob
     b.textContent = "writing clarity: " + contrastMode +
       (mode !== "live" && contrastMode !== "off" && !s.pillow
         ? " (needs Pillow here — pip install pillow)" : "");
-    el("stagebtn").hidden = !mode;
+    el("stagebtn").hidden = !mode || !devMode;
   }
+
+  // ---------- study <-> dev mode: changes what's shown, never what's logged
+  function renderDev(s) {
+    devMode = !!s.dev;
+    document.body.classList.toggle("dev", devMode);
+    const b = el("devbtn");
+    b.hidden = !mode;
+    b.textContent = devMode ? "dev ✓" : "dev";
+    el("rec").title = devMode && s.session_path ? s.session_path : "";
+  }
+  el("devbtn").addEventListener("click", async () => {
+    await fetch("/dev", { method: "POST", body: JSON.stringify({ on: !devMode }) }).catch(() => null);
+    poll.soon();
+  });
+
+  // ---------- improvement suggestions: captured with context, both modes ----
+  el("suggestform").addEventListener("submit", async e => {
+    e.preventDefault();
+    const text = el("suggestinput").value.trim();
+    if (!text) return;
+    el("suggestinput").value = "";
+    const r = await fetch("/suggest", { method: "POST", body: JSON.stringify({ text }) }).catch(() => null);
+    const d = document.createElement("div");
+    const t = new Date().toTimeString().slice(0, 5);
+    d.innerHTML = (r?.ok ? '<span class="ok">✓</span> ' : "✗ ") + esc(t + " — " + text);
+    el("suggestlog").prepend(d);
+  });
 
   // ---------- check-stage trace (test feature): where does the time go? ----
   // Every chip is a real pipeline event pushed by the server — contrast done,
@@ -1145,7 +1199,7 @@
 
   function renderStages() {
     const box = el("stagebox");
-    if (!stageTrace) { box.hidden = true; return; }
+    if (!stageTrace || !devMode) { box.hidden = true; return; }
     let run = stageRun;
     if (!run) {                        // page loaded between checks: show the last one
       const last = (lastState?.checks || []).find(c => c.stages && c.stages.length);
@@ -1432,6 +1486,7 @@
     renderRibbon(s.checks || []);
     renderDialogue();
     renderHistory(s.checks || []);
+    renderDev(s);
     renderContrast(s);
     renderStages();
     renderRec(s);

@@ -74,6 +74,8 @@ cono-check --replay DIR          # replay any recorded session directory
 cono-check --port 9000           # serve somewhere else (default: 8764)
 cono-check --contrast strong     # writing clarity: off | auto (default) | strong
 cono-check --no-contrast         # same as --contrast off
+cono-check --no-record           # testdev opt-out: run live without recording
+cono-check --dev                 # start in dev mode (show instrumentation)
 cono-check --no-open             # don't open the browser automatically
 ```
 
@@ -115,8 +117,8 @@ page. The camera n/10 chip next to it links to the exact frame read.
 
 Feeding the map: every snap gets a **writing-clarity pass** before the
 model reads it, with three strengths you can switch mid-session from
-the "writing clarity" button under the camera (or `--contrast MODE` at
-start — handy when experimenting with different pens and pencils):
+the "writing clarity" button (dev mode; `--contrast MODE` at start —
+handy when experimenting with different pens and pencils):
 
 - **auto** (default) — a global histogram stretch: a near-no-op on a
   well-lit page, a real lift on faint pencil in dim classroom light.
@@ -173,7 +175,25 @@ faster than one per 5 s.
 
 And the cone: the little 3D cone in the header (Cono, cone) spins while
 a check or chat reply is being read and rests when the desk is quiet —
-a glanceable "is it thinking" mark, pure inline SVG + CSS.
+a glanceable "is it reading" mark, pure inline SVG + CSS.
+
+## Study mode and dev mode
+
+The page opens in **study mode**: just the twin and its dialogue, with
+automatic defaults (writing clarity on auto, map and cone doing their
+jobs) — nothing to configure. The quiet **dev** switch under the camera
+(or starting with `--dev`) reveals the test instrumentation together:
+the check-stages trace, the writing-clarity cycler, per-check latency
+and clarity tags in the history, and the session bundle path on the ●
+indicator. Modes only change what is shown — recording and per-check
+metadata are always captured in both.
+
+**Suggest an improvement** (both modes): a small box under the history
+takes one-line suggestions mid-use ("this hint was too wordy", "the map
+lags"). Each entry is timestamped and captured with its context — the
+active problem, the last check, the current frame and mode/clarity
+config — into the session bundle and into a cumulative local file,
+`~/deskcap/suggestions.jsonl`, that survives individual sessions.
 
 **Watching where the time goes** (test feature): a small "check stages"
 strip in the side column traces each in-flight check or chat reply
@@ -182,10 +202,10 @@ word from the model, then each section of the reply as it streams in
 (visibility → working on → problem → page → tally → check → kind → grid
 → equations) — with a live elapsed clock. Every chip lights on a real
 server event, never a timer animation, so during head-to-head sessions
-you can see exactly which stage is eating the seconds. Hide or show it
-with the "stage trace" button; the per-stage timestamps are logged into
-every session record and `tools/score-session.py` prints a stage-timing
-table from them.
+you can see exactly which stage is eating the seconds. It lives in dev
+mode (with its own "stage trace" toggle there); the per-stage
+timestamps are logged into every session record in both modes, and
+`tools/score-session.py` prints a stage-timing table from them.
 
 ## Every live run is recorded (testdev mode)
 

@@ -1,5 +1,25 @@
 # Notes for Claude
 
+## Development standard (Yao, 2026-10-23) — governs every change
+
+- **Target client:** a college student who is overstimulated and expects
+  a convenient, accurate solution to their study problems. Every feature
+  defaults to zero-config convenience and accuracy — if it needs
+  explaining or fiddling, it belongs in dev mode, not study mode.
+- **Two modes, one truth:** study mode (default) shows only the product —
+  twin, problem card, relations, page, map, dialogue, cone. Dev mode
+  (`--dev` or the quiet "dev" switch) reveals the instrumentation
+  together: stage trace, clarity cycler, latency/config tags, session
+  internals. Modes change what is SHOWN, never what is logged — recording
+  and per-check metadata run in both.
+- **Design language:** chat INTERACTION patterns are fine and encouraged —
+  message threads, bubbles, an input box, the mechanics students already
+  know from tools they use. What must never be chatbotty is the design
+  LANGUAGE: no generic-AI-assistant aesthetic (sparkle/robot iconography,
+  purple-gradient AI-product styling), no "AI is thinking…" theater, no
+  assistant-persona voice. This reads as a study tool that watches paper,
+  with its own identity: the cone, the lamp palette, the desk.
+
 - **Every feature change updates README.md in the same change.** The
   README is the product's front door: if you touch flags, modes, the
   pipeline, requirements, or the UI's behavior, fix the README before
