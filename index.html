@@ -241,6 +241,11 @@
   .check.fix { border-left: 2px solid var(--lamp); padding-left: 14px; }
   .check .meta { margin-top: 10px; margin-bottom: 0; }
   details.read summary { color: var(--faded); font-size: 13px; cursor: pointer; }
+  details.phonehelp { margin: 10px auto 0; max-width: 56ch; text-align: left; }
+  details.phonehelp summary { color: var(--faded); font-size: 13px; cursor: pointer; text-align: center; }
+  details.phonehelp ol { margin: 10px 0 0 22px; color: var(--faded); font-size: 13.5px; line-height: 1.5; }
+  details.phonehelp li { margin-bottom: 8px; }
+  details.phonehelp b { color: var(--paper); font-weight: 600; }
   details.read .onpage {
     font-family: Charter, Georgia, serif;
     font-size: 14px;
@@ -340,6 +345,21 @@
       <button class="quiet" id="endbtn" type="button" hidden>End session</button>
       <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
     </div>
+    <details class="phonehelp" id="phonehelp" hidden>
+      <summary>Using an iPhone as the Desk View camera</summary>
+      <ol>
+        <li><b>Turn on Continuity Camera</b> on the phone (Settings → General → AirPlay &amp; Continuity),
+          then lock it and set it on the lid, landscape, rear cameras facing you. The phone has to stay
+          locked with the screen off — unlock it or pick it up and the feed stops.</li>
+        <li><b>Desk View opens but the picture is black?</b> The phone is connected but sending no video.
+          Make sure the mount or case isn't covering the rear lenses (Desk View uses the ultra-wide one),
+          and that the phone isn't in Low Power Mode or very low on battery — it stays listed as a camera
+          but stops sending frames.</li>
+        <li><b>Still black:</b> toggle Continuity Camera off, lock the phone, wait ten seconds, and toggle it
+          back on. To check it's the phone and not Cono, pick the iPhone as the camera in FaceTime — if
+          that's black too, restart both devices with Wi-Fi and Bluetooth on.</li>
+      </ol>
+    </details>
     <div id="sessionpanel" hidden></div>
   </figure>
 
@@ -481,7 +501,8 @@
     document.body.classList.remove("paused");
     el("pausebtn").textContent = "Pause camera";
     el("pausebtn").className = "quiet";
-    showOffline(["Connecting to the Desk View camera…", "Lock your iPhone and set it on the lid, rear cameras facing you."]);
+    showOffline(["Connecting to the Desk View camera…", "Lock your iPhone and set it on the lid, rear cameras facing you. " +
+      "Black picture? See the iPhone tips under the video."]);
     camRefresh = true;          // next /state decides: live picture, or still waiting
     setStatus();
   }
@@ -628,7 +649,8 @@
     const lost = /^lost/.test(msg || "");
     showOffline([lost ? "The Desk View camera dropped out." : "Waiting for the Desk View camera.",
       "Lock your iPhone and set it back on the lid, rear cameras facing you — Cono picks " +
-      "up again by itself, or hit Reconnect to look for it now. (No iPhone handy? Restart as `cono-check browser`.)"],
+      "up again by itself, or hit Reconnect to look for it now. Black picture? See the iPhone tips under the video. " +
+      "(No iPhone handy? Restart as `cono-check browser`.)"],
       resumeDeskView, "Reconnect");
     el("caption").textContent = "";
   }
@@ -906,6 +928,7 @@
         el("sessionbtn").hidden = false;
         el("pausebtn").hidden = false;
         el("reframebtn").hidden = false;
+        el("phonehelp").hidden = false;
         el("caption").textContent = DESKVIEW_CAPTION;
         el("checknow").disabled = false;
         startStream();
