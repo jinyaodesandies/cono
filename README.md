@@ -55,6 +55,22 @@ opens Apple's Desk View window in its set-up mode — drag the trapezoid
 around your page and start Desk View — and Cono resumes with the new
 crop; macOS owns that framing, so this is also the way to reset it.
 
+**Using an iPhone as the Desk View camera** (any Mac before M4):
+
+1. Turn on Continuity Camera on the phone (Settings → General →
+   AirPlay & Continuity), then lock it and set it on the lid, landscape,
+   rear cameras facing you. The phone has to stay locked with the screen
+   off — unlock it or pick it up and the feed stops.
+2. If the Desk View window opens but shows only black, the phone is
+   connected and the video itself is empty. Check that the rear lenses
+   are not covered by the mount or a case (Desk View uses the ultra-wide
+   lens), and that the phone is not in Low Power Mode or very low on
+   battery — it stays listed as a camera but stops sending frames.
+3. Still black: toggle Continuity Camera off, lock the phone, wait ten
+   seconds, and toggle it back on. To confirm it is the phone and not
+   Cono, pick the iPhone as the camera in FaceTime — if that is black
+   too, restart both devices with Wi-Fi and Bluetooth on.
+
 **Browser mode** (`cono-check browser`) is the fallback for Macs without
 Desk View — it works with any camera the browser can see:
 the built-in one (hold the page up facing the screen), a webcam, or an
