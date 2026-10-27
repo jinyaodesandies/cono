@@ -6,14 +6,19 @@
 <title>Cono check</title>
 <style>
   :root {
-    --desk: #1e1b17;
-    --surface: #2a2621;
-    --line: #3a342c;
-    --paper: #f2ede3;
-    --faded: #a89c8a;
-    --lamp: #e0a62e;
-    --leaf: #93b578;
-    --ember: #e07a5a;
+    /* The Study Lamp — a warm pool of lamplight on a night desk.
+       Legibility first (dim classrooms): three distinct ink weights.
+       One luminous accent (the lamp); green/clay stay semantic + far apart. */
+    --desk: #1a1712;          /* deep warm desk brown */
+    --surface: #262019;       /* panel — paper catching light */
+    --line: #3d3426;          /* warm hairline */
+    --paper: #f4efe4;         /* primary ink (~14:1) */
+    --ink: #cdc1aa;           /* secondary ink, legible in dim rooms (~9:1) */
+    --faded: #b1a488;         /* tertiary only — timestamps, hints (~7:1) */
+    --lamp: #f2b32c;          /* the lamp glow: unknowns, focus, in-flight */
+    --lamp-dim: rgba(242, 179, 44, 0.14);
+    --leaf: #9ecb6b;          /* read / confirm — a green pen */
+    --clay: #d9573c;          /* can't read / fix — brick red, clearly not amber */
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -134,7 +139,7 @@
   .twin {
     min-width: 0;
     background: radial-gradient(90% 80% at 50% 20%,
-                rgba(224, 166, 46, 0.10), rgba(224, 166, 46, 0.02) 60%, transparent 80%);
+                rgba(242, 179, 44, 0.10), rgba(242, 179, 44, 0.02) 60%, transparent 80%);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 22px 24px 18px;
@@ -156,7 +161,7 @@
     color: var(--lamp);
     white-space: nowrap;
   }
-  .probprog { color: var(--faded); font-size: 13.5px; font-style: italic; flex: 1; min-width: 0; }
+  .probprog { color: var(--ink); font-size: 13.5px; font-style: italic; flex: 1; min-width: 0; }
   .probq {
     margin-top: 10px;
     font-size: 19px;
@@ -197,7 +202,7 @@
     font-size: 19px;
     cursor: pointer;
   }
-  .eq:hover { background: rgba(224, 166, 46, 0.08); }
+  .eq:hover { background: rgba(242, 179, 44, 0.08); }
   .eq.anchored, .onpline.anchored, .probq.anchored { outline: 1px dashed var(--lamp); outline-offset: 2px; }
   .onpagebox h3 { font-size: 11.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faded); margin-bottom: 6px; }
   #onpagelines {
@@ -210,11 +215,11 @@
     padding-left: 12px;
   }
   .onpline { padding: 1px 6px 1px 2px; border-radius: 3px; cursor: pointer; }
-  .onpline:hover { background: rgba(224, 166, 46, 0.08); }
+  .onpline:hover { background: rgba(242, 179, 44, 0.08); }
   .probq { cursor: pointer; border-radius: 4px; }
-  .probq:hover { background: rgba(224, 166, 46, 0.06); }
+  .probq:hover { background: rgba(242, 179, 44, 0.06); }
   sub, sup { font-size: 0.72em; }
-  .eq .eqname { font-family: "Avenir Next", Avenir, sans-serif; font-size: 12.5px; color: var(--faded); }
+  .eq .eqname { font-family: "Avenir Next", Avenir, sans-serif; font-size: 12.5px; color: var(--ink); }
   .eq sub, .eq sup { font-size: 0.68em; }
   .eq .unk {
     color: var(--lamp);
@@ -281,7 +286,7 @@
     position: relative;
     aspect-ratio: 4 / 3;              /* a real viewfinder, never a thin strip */
     border-radius: 4px;
-    background: #15130f;
+    background: #14100a;
     box-shadow: 0 1px 0 rgba(242, 237, 227, 0.1) inset, 0 12px 34px -14px rgba(0, 0, 0, 0.7);
     overflow: hidden;
   }
@@ -291,7 +296,7 @@
     height: 100%;
     object-fit: contain;
     border-radius: 4px;
-    background: #15130f;
+    background: #14100a;
   }
   .stage img.replay { position: absolute; inset: 0; transition: opacity 0.25s; }
   .stage img.replay.under { position: static; }
@@ -326,7 +331,7 @@
   }
   .stage .offline h2 { color: var(--paper); font-size: 15px; font-weight: 600; margin-bottom: 8px; }
   .stage .offline p { max-width: 44ch; margin: 0 auto 14px; font-size: 13.5px; }
-  .stage figcaption { margin-top: 8px; color: var(--faded); font-size: 12.5px; }
+  .stage figcaption { margin-top: 8px; color: var(--ink); font-size: 12.5px; }
   .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
   .quiet {
     background: none;
@@ -361,7 +366,7 @@
     text-decoration: none;
   }
   .chip.mid { color: var(--lamp); }
-  .chip.poor { color: var(--ember); border-color: var(--ember); }
+  .chip.poor { color: var(--clay); border-color: var(--clay); }
   .workingon {
     color: var(--faded); font-size: 13px; font-style: italic;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
@@ -378,13 +383,13 @@
     flex-shrink: 0;
   }
   #rmap .cell { border-radius: 2px; background: rgba(242, 237, 227, 0.05); cursor: pointer; border: none; padding: 0; }
-  #rmap .cell.r2 { background: rgba(147, 181, 120, 0.65); }
-  #rmap .cell.r1 { background: rgba(224, 122, 90, 0.75); }
+  #rmap .cell.r2 { background: rgba(158, 203, 107, 0.65); }
+  #rmap .cell.r1 { background: rgba(217, 87, 60, 0.75); }
   #rmap .cell:hover { outline: 1px solid var(--lamp); }
-  .maplegend { color: var(--faded); font-size: 12.5px; max-width: 24ch; }
+  .maplegend { color: var(--ink); font-size: 12.5px; max-width: 24ch; }
   .maplegend .lg { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-  .maplegend .lg.read { background: rgba(147, 181, 120, 0.65); }
-  .maplegend .lg.cant { background: rgba(224, 122, 90, 0.75); }
+  .maplegend .lg.read { background: rgba(158, 203, 107, 0.65); }
+  .maplegend .lg.cant { background: rgba(217, 87, 60, 0.75); }
   .maptime { color: var(--faded); font-size: 12px; }
   .reframe { color: var(--lamp); font-size: 13.5px; }
 
@@ -405,8 +410,8 @@
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .stagechip.hit { background: rgba(147, 181, 120, 0.16); color: var(--leaf); }
-  .stagechip.cur { background: rgba(224, 166, 46, 0.18); color: var(--lamp); animation: breathe 1.2s ease-in-out infinite; }
+  .stagechip.hit { background: rgba(158, 203, 107, 0.16); color: var(--leaf); }
+  .stagechip.cur { background: rgba(242, 179, 44, 0.18); color: var(--lamp); animation: breathe 1.2s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .stagechip.cur { animation: none; } }
 
   details.older summary { cursor: pointer; color: var(--faded); font-size: 13.5px; padding: 4px 0; }
@@ -491,7 +496,7 @@
     <path d="M12 1.5 L21.6 21 A9.6 3.6 0 0 1 2.4 21 Z" fill="#8a6f3c"/>
     <g clip-path="url(#coneclip)">
       <rect class="sheen" x="0" y="0" width="7" height="27" fill="rgba(242,237,227,0.45)"/>
-      <rect class="shade" x="0" y="0" width="7" height="27" fill="rgba(30,27,23,0.35)"/>
+      <rect class="shade" x="0" y="0" width="7" height="27" fill="rgba(26,23,18,0.35)"/>
     </g>
     <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="#b58b43"/>
     <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="none" stroke="rgba(242,237,227,0.25)" stroke-width="0.6"/>

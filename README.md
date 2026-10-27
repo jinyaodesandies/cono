@@ -76,6 +76,7 @@ cono-check --contrast strong     # writing clarity: off | auto (default) | stron
 cono-check --no-contrast         # same as --contrast off
 cono-check --no-record           # testdev opt-out: run live without recording
 cono-check --dev                 # start in dev mode (show instrumentation)
+cono-check --view ambient        # start in the ambient face (default: twin)
 cono-check --no-open             # don't open the browser automatically
 ```
 
@@ -158,6 +159,13 @@ same mistake) and it gives one worked step; ask a second time and it
 gives the full answer plainly, with an offered "want to explain it back
 to me on paper?". Direct questions about what a problem means are just
 answered — no gatekeeping.
+
+**Ambient view.** The Twin / Ambient toggle in the header flips the same
+session into a second face: the camera becomes the hero, Cono's notes sit
+in the margin next to it, and the analytical panels (relations, the
+transcribed page) rest until you switch back. Same plumbing, same
+recording, same readability map — only what leads changes. Your choice
+sticks across launches; `--view ambient` starts there.
 
 ## Latency
 
