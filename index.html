@@ -1382,15 +1382,15 @@
   // request sent, first streamed token, each reply section appearing — never
   // a timer animation. The elapsed clock is the only thing that ticks.
   const STAGE_ORDER = {
-    check: ["contrast", "sent", "first word", "visibility", "working on", "problem",
+    check: ["contrast", "zoom", "sent", "first word", "visibility", "working on", "problem",
             "on page", "tally", "check", "kind", "grid", "equations", "done"],
-    chat:  ["crop", "sent", "first word", "done"],
+    chat:  ["crop", "zoom", "sent", "first word", "done"],
   };
   const STAGE_LABEL = {
     contrast: "contrast", sent: "sent", "first word": "model", visibility: "vis",
     "working on": "work", problem: "prob", "on page": "page", tally: "tally",
     check: "check", kind: "kind", grid: "grid", equations: "eqns",
-    done: "done", crop: "crop",
+    done: "done", crop: "crop", zoom: "zoom",
   };
 
   function renderStages() {
@@ -1406,7 +1406,8 @@
     const byName = {};
     run.stages.forEach(s => { byName[s.stage] = s.ms; });
     const order = STAGE_ORDER[run.kind] || STAGE_ORDER.check;
-    const chips = order.filter(n => n in byName || n !== "crop");
+    const optional = ["crop", "zoom"];  // only shown on the runs that used them
+    const chips = order.filter(n => n in byName || !optional.includes(n));
     const lastHit = run.stages.length ? run.stages[run.stages.length - 1].stage : null;
     el("stagestrip").innerHTML = chips.map(n => {
       const hit = n in byName;

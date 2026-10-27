@@ -134,13 +134,19 @@ through as plain text rather than being dropped.
 
 **On the page.** Cono's latest transcription of your handwriting, line
 by line, right in the twin — your page, reborn as text it can talk
-about.
+about. Readings are sticky: ink that hasn't changed keeps its earlier
+transcription verbatim (the same discipline the question registry applies
+to printed text), so a line you wrote ten minutes ago can't quietly
+re-roll into a different reading on every check.
 
 **Readability map.** A page-shaped grid, updated with every snapshot:
 green cells the model could read, red cells where something's there but
 too blurry, small, or cut off to read, dark cells blank paper. This is
 the framing indicator — a red band means reposition that part of the
 page. The camera n/10 chip next to it links to the exact frame read.
+And when the same detail stays unreadable two checks in a row, the next
+check automatically carries a full-resolution close-up of that region —
+Cono zooms in itself instead of asking you to read your own page to it.
 
 Feeding the map: every snap gets a **writing-clarity pass** before the
 model reads it, with three strengths you can switch mid-session from
@@ -185,6 +191,21 @@ same mistake) and it gives one worked step; ask a second time and it
 gives the full answer plainly, with an offered "want to explain it back
 to me on paper?". Direct questions about what a problem means are just
 answered — no gatekeeping.
+
+**It never argues with your page.** Two trust rules run server-side on
+every note. Cono doesn't repeat itself: every piece of advice it gives is
+registered, a reworded repeat makes the next check escalate to one worked
+step (or drop the point if it can't re-verify it from the image), and a
+third identical nudge is suppressed into a quiet line. And your reading
+of your own page wins: if you tell Cono the sheet says something
+different from what it read — or it keeps pushing advice you're visibly
+not taking — the next reply re-reads the disputed spot from a
+full-resolution copy, and if that still can't settle it, Cono concedes
+and builds on your version instead of telling you to "re-read" your own
+paper. Checks that would only announce "nothing new" never become note
+cards (a quiet line at most), and a "nothing new" claim that contradicts
+the camera's own change signal is suppressed outright and logged as a
+misfire.
 
 **Ambient view.** The Twin / Ambient toggle in the header flips the same
 session into a second face: the camera becomes the hero, Cono's notes sit

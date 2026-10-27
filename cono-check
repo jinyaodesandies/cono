@@ -19,9 +19,20 @@ surface: click a transcribed line, a relation, the problem card, or a
 readability cell to anchor a typed question to that exact thing. The
 Next button advances the problem card and pins it there until your
 writing genuinely moves on. Questions, once read clearly, live in a
-registry and never reword themselves because a hand covered the sheet. Chem/math is typeset (H2O-style subscripts,
+registry and never reword themselves because a hand covered the sheet;
+transcribed handwriting is sticky the same way (unchanged ink keeps its
+earlier reading verbatim). Chem/math is typeset (H2O-style subscripts,
 charges, arrows) everywhere it appears. Replies stream — first text in
 ~1-3 s.
+
+Trust guards (server-side, every note): advice already given is never
+repeated — a repeat escalates one ladder rung or goes quiet, a third
+identical nudge is suppressed; a disputed reading (the student contradicts
+what Cono read, or ignores the same advice twice) triggers a full-res
+re-read of the contested region with explicit permission to concede; a
+region unreadable two checks running gets a zoomed close-up on the next
+check; "nothing new" narration never becomes a note card, and a "nothing
+new" that contradicts the page-change signal is suppressed as a misfire.
 
 Usage:
   cono-check                     # the Desk View camera (top-down on your desk) - the default
@@ -148,17 +159,17 @@ Respond in EXACTLY this plain-text format, no markdown, fields in this exact ord
 VISIBILITY: n/10 - one short line: what the camera sees; which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units, exact digits) are readable; note blur or glare.
 WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
 PROBLEM: the problem the student is currently on, exactly as: <the worksheet's own printed label> | <that question restated in at most 12 words> | <the student's progress on it in at most 8 words, or "not started">. If the context lists known questions, match the student's work against them and copy that label and question text EXACTLY as listed, word for word. A hand, pen, shadow, blur, or anything covering printed text is NEVER evidence that a question changed - the printed sheet does not rewrite itself; spend your reading effort on the student's new handwriting instead. Give a label and question that are not in the known list only when the visible work cannot belong to any known question. If the page has no labeled problems, invent a short stable label from the content.
-ON PAGE: the student's handwritten work, line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. Do NOT copy printed question text - give each item's printed label, then the handwriting under it; skip items with no handwriting. Transcribe only from the image, never from the context. If no page or writing is visible, say what IS visible instead.
-TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, or recount sig figs - BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok") - the verdict must follow from the two numbers you just wrote: if they differ, it is OFF, no matter what you expected. Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error. Write "none" if no counting is involved.
+ON PAGE: the student's handwritten work, line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. If the context carries an earlier reading of this handwriting, it is your own established baseline: for every line whose ink has not visibly changed, copy that line from the baseline VERBATIM, character for character - never produce a new variant reading of unchanged ink; spend your fresh reading effort only on new or changed handwriting, and depart from the baseline only where you can see at high confidence that it was wrong (then give the whole corrected line). Do NOT copy printed question text - give each item's printed label, then the handwriting under it; skip items with no handwriting. If no handwriting is readable, ON PAGE is exactly one line: "L1 (?)" - that shape, never prose, never a description of the scene (what IS visible belongs in VISIBILITY).
+TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, and when a computed result is written with its digits, count significant figures explicitly: each input's sig figs and the result's ("11.0 -> 3 sf, 44.1 -> 3 sf, result 32.86800 -> 7 sf - OFF, should be 3") - a result carrying more sig figs than its least-precise input is OFF even when the arithmetic itself is right. Do all of this BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok") - the verdict must follow from the two numbers you just wrote: if they differ, it is OFF, no matter what you expected. Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error, but unjustified extra precision is. Write "none" if no counting is involved.
 CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed.
 GRID: a readability map of the sheet of paper itself (ignore the desk around it): exactly 6 lines of 4 digits, each digit one cell of the page in reading order, top-left cell first. 2 = ink or print there and readable, 1 = something written or printed there but too blurry, small, cut off, or glared to read reliably, 0 = blank paper. If no page is in frame, give 6 lines of 0000.
 EQUATIONS: ALL the relations that govern the problem in PROBLEM, up to 4 - taken from the page if the student wrote them, otherwise the standard relations the problem needs. One complete relation per line, never truncated, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Never reveal a value or coefficient the student still has to find or fix - put ? in its place (their balancing wrong -> write ?O_2, never the corrected coefficient). Write "none" if none apply."""
 
 CONTEXT_BLOCK = """
-Context from your earlier looks (for WORKING ON, PROBLEM and CHECK only - always transcribe the student's handwriting from the image, not from this):{questions}
+Context from your earlier looks. The known questions and the baseline reading below are your own established state: trust them for ink that has not changed, and read only new or changed ink fresh from the image.{questions}
 Current problem: {problem}{pin_note}
-Earlier reading of the student's handwriting:
+Your earlier reading of the student's handwriting (the baseline - copy lines whose ink has not changed from here VERBATIM):
 {last_on_page}
 Your recent notes to the student (do not repeat these):
 {last_checks}{advice}{thread}
@@ -171,6 +182,12 @@ Advice you have ALREADY given on this problem (never give any of it again, even 
 
 REPEAT_NOTE = """
 You have pointed at the same thing more than once and the student has not changed it. Re-verify that premise from the image at full attention this check. If you can still see it clearly, escalate: give ONE worked step toward fixing it, not the hint again. If you cannot verify it at high confidence, your reading may be the wrong one - concede: do not restate the advice; comment on something else or set KIND to "idle"."""
+
+ZOOM_NOTE = """
+The second image is a full-resolution close-up (or full-resolution copy) of the page region you could not resolve in earlier looks, or that the student disputes. Read the contested details directly from it this check - never ask the student to read them to you. If even the close-up cannot settle it, accept the student's version as fact and build on it."""
+
+DISPUTE_NOTE = """
+The student is disputing or re-asserting what their page actually says - treat their reading as probably correct. Re-read the disputed detail from the attached image (a full-resolution copy is included) before answering. If you can now verify it, say plainly what the page shows. If you cannot verify it at high confidence, CONCEDE: accept the student's reading as fact, say so without fuss ("you're right - taking the table as showing..."), and carry the problem forward from their reading. NEVER tell the student to re-read, look again at, or double-check something they have already read out to you - between the two of you, you are the one with the reading problem."""
 
 THREAD_BLOCK = """
 Recent conversation with the student about this problem:
@@ -227,7 +244,7 @@ Your recent margin notes (do not repeat them):
 Conversation so far on this problem:
 {thread}
 
-Ladder policy - never refuse help, never hand over the answer early. Counting this message, the student has explicitly asked for help on this problem {asks} time(s). If the message asks for the answer, the fix, or the next step on flagged work: on ask #1, give ONE worked step with a one-clause reason if your notes already asked a guiding question about it, otherwise ask ONE guiding question; on ask #2 or later, give the full remaining answer plainly, keeping their correct lines, and end with "want to explain it back to me on paper?". A direct question about what a problem means, a definition, or something readable off the page may be answered directly at any rung. At most 2 short sentences (the full answer may take the space it needs); chem/math shorthand over prose; no exclamation marks; use the worksheet's own printed labels; never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. When your answer hinges on a count or on arithmetic, redo the count digit by digit in shorthand as part of the reply ("O: L 4x2=8, R 3x2+4=10") instead of asserting a total from memory.
+Ladder policy - never refuse help, never hand over the answer early. Counting this message, the student has explicitly asked for help on this problem {asks} time(s). If the message asks for the answer, the fix, or the next step on flagged work: on ask #1, give ONE worked step with a one-clause reason if your notes already asked a guiding question about it, otherwise ask ONE guiding question; on ask #2 or later, give the full remaining answer plainly, keeping their correct lines, and end with "want to explain it back to me on paper?". A direct question about what a problem means, a definition, or something readable off the page may be answered directly at any rung. At most 2 short sentences (the full answer may take the space it needs); chem/math shorthand over prose; no exclamation marks; use the worksheet's own printed labels; never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. When your answer hinges on a count or on arithmetic, redo the count digit by digit in shorthand as part of the reply ("O: L 4x2=8, R 3x2+4=10") instead of asserting a total from memory, and your stated conclusion must agree with the two numbers you just wrote - if they differ, say they differ. If the student tells you what their page or the printed sheet says and it differs from your reading, their reading wins unless you can point at the exact place in the image that shows otherwise - never tell them to re-read or double-check something they just read out to you.
 
 Student: {text}"""
 
@@ -822,6 +839,15 @@ def tok_sim(a, b):
     return max(inter / len(a | b), inter / min(len(a), len(b)) * 0.8)
 
 
+CANT_READ_RE = re.compile(
+    r"too (faint|small|blurry|fine|tiny)|can'?t (read|make out|resolve|verify)|"
+    r"cannot (read|make out|resolve|verify)|unreadable|illegible|"
+    r"not (readable|legible)|hard to (read|make out)", re.I)
+
+RE_READ_RE = re.compile(
+    r"\bre-?read\b|read (it|that|them|the \w+) again|look again|"
+    r"double-?check|check (it|that|the \w+) again", re.I)
+
 NOTHING_NEW_RE = re.compile(
     r"\b(nothing new|no new (handwriting|writing|work|ink|answers?)|"
     r"same (work|page|writing) as before|no (visible )?changes? since|"
@@ -847,6 +873,13 @@ def guard_check(entry, reason):
     """
     label = (entry.get("problem") or STATE.problem or {}).get("label")
     text = entry.get("check") or ""
+    # can't-resolve ledger: two checks in a row that flag an unreadable fact
+    # on the same problem arm a zoomed re-read for the next check (2.6)
+    if label:
+        if CANT_READ_RE.search(f"{entry.get('visibility_note') or ''} {text}"):
+            STATE.cant_resolve[label] = STATE.cant_resolve.get(label, 0) + 1
+        else:
+            STATE.cant_resolve[label] = 0
     claims_nothing = bool(NOTHING_NEW_RE.search(text)) or \
         (entry.get("working_on") or "").strip().lower() == "nothing new"
     if claims_nothing and reason in ("page settled", "checking in"):
@@ -865,7 +898,10 @@ def guard_check(entry, reason):
     if entry.get("kind") == "fix" and label and text:
         toks = advice_toks(text)
         log = STATE.advice_log.setdefault(label, [])
-        hit = next((e for e in log if tok_sim(toks, e["toks"]) >= 0.6), None)
+        # 0.5: a confirm+question note shares only ~half its content words
+        # with its own reworded repeat (measured on live repeats) - the
+        # paraphrase family must still register
+        hit = next((e for e in log if tok_sim(toks, e["toks"]) >= 0.5), None)
         if hit is None:
             log.append({"toks": toks, "text": text, "n": 1})
         else:
@@ -956,6 +992,18 @@ def absorb_twin(entry, snap, next_from=None):
     if accepted and entry.get("equations"):
         STATE.equations = entry["equations"]
     if entry.get("on_page"):
+        # sticky transcription: a re-read of an unchanged line never re-rolls
+        # its surface form - if the new reading matches the previous one up
+        # to case, spacing, and equivalent glyphs (·/•/×/* for multiplication,
+        # unicode minus), the previous reading persists verbatim
+        def normline(l):
+            l = l.translate({0xB7: "*", 0x2022: "*", 0xD7: "*", 0x22C5: "*", 0x2212: "-"})
+            return re.sub(r"\s+", " ", l).strip().lower()
+        old = {normline(l): l.strip()
+               for l in STATE.last_on_page.splitlines() if l.strip()}
+        lines = [old.get(normline(l), l.strip())
+                 for l in entry["on_page"].splitlines() if l.strip()]
+        entry["on_page"] = "\n".join(lines)
         STATE.last_on_page = entry["on_page"]
 
 
@@ -980,6 +1028,18 @@ def checker(frames_dir):
             # non-compliance arm — see also guard_check)
             repeat_hot = any(e["n"] >= 2 for e in STATE.advice_log.get(cur_label, []))
             disputed = STATE.disputes.get(cur_label, False)
+            # the dispute and the can't-resolve ledger each buy ONE zoomed
+            # re-read: a full-res close-up of the unreadable grid region (or
+            # the full-res frame) rides along as a second image (2.1, 2.6)
+            cant = cur_label is not None and STATE.cant_resolve.get(cur_label, 0) >= 2
+            needs_zoom = disputed or cant
+            if disputed:
+                STATE.disputes[cur_label] = False
+            if cant:
+                STATE.cant_resolve[cur_label] = 0
+            grid_ones = [(r, c, len(row), len(STATE.grid))
+                         for r, row in enumerate(STATE.grid)
+                         for c, d in enumerate(row) if d == "1"] if needs_zoom else []
         in_session = SESSION.active
         cfg = SESSION.next_config() if in_session else \
             {"style": "question", "structure": "stream", "width": 960}
@@ -1023,13 +1083,26 @@ def checker(frames_dir):
                 entry["contrast"] = enhance_snap(frames_dir / snap, cmode) or "skip"
             st.hit("contrast")
             send = shrink_for_model(frames_dir / snap, cfg["width"])
+            zoom = None
+            if needs_zoom:              # one full-res re-read of the contested region
+                if grid_ones:
+                    x = sum((c + 0.5) / cols for _, c, cols, _ in grid_ones) / len(grid_ones)
+                    y = sum((r + 0.5) / rows for r, _, _, rows in grid_ones) / len(grid_ones)
+                    zoom = crop_for_anchor(frames_dir / snap, x, y, frac=0.5)
+                if zoom is None:
+                    zoom = frames_dir / snap        # no map to aim with: full-res frame
+                extra += ZOOM_NOTE
+                entry["zoom"] = "crop" if zoom != frames_dir / snap else "full"
+                st.hit("zoom")
             st.hit("sent")
             prompt = PROMPT.format(context=context,
                                    check_style=CHECK_STYLES[cfg["style"]],
                                    no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
                                    escalation=extra)
-            raw, first = claude_stream([{"type": "text", "text": prompt}, img_block(send)],
-                                       STATE.model, on_text=push)
+            blocks = [{"type": "text", "text": prompt}, img_block(send)]
+            if zoom:
+                blocks.append(img_block(zoom))
+            raw, first = claude_stream(blocks, STATE.model, on_text=push)
             entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
                 guard_check(entry, reason)      # trust guards: dedup + nothing-new
@@ -1068,6 +1141,7 @@ def checker(frames_dir):
                       "visibility": entry.get("visibility"),
                       "suppressed": entry.get("suppressed"),
                       "repeat_n": entry.get("repeat_n"),
+                      "zoom": entry.get("zoom"),
                       "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
                       "raw": raw, "annotation": None}
             with SESSION.lock:
@@ -1093,6 +1167,18 @@ def run_chat(cid, text, anchor, frames_dir):
         STATE.asks[label] = STATE.asks.get(label, 0) + 1
         asks = STATE.asks[label]
         shown = text + (f"  ⌖ {tag}" if tag else "")
+        earlier = STATE.threads.get(label, [])
+        # perception-dispute detection (2.1): the student re-asserting the same
+        # point (content-word overlap with their own earlier messages), or
+        # coming back after being told to re-read something, is a dispute -
+        # the reply gets a full-res re-read and explicit permission to concede
+        prev_you = [m["text"] for m in earlier if m["who"] == "you"][-3:]
+        last_cono = next((m["text"] for m in reversed(earlier) if m["who"] == "cono"), "")
+        toks = advice_toks(text)
+        dispute = any(tok_sim(toks, advice_toks(p)) >= 0.4 for p in prev_you) \
+            or bool(RE_READ_RE.search(last_cono))
+        if dispute:
+            STATE.disputes[label] = True    # the next check concedes too
         STATE.threads.setdefault(label, []).append(
             {"who": "you", "text": shown, "time": now, "kind": "chat", "snap": None, "id": cid})
         problem = fmt_problem(STATE.problem)
@@ -1122,6 +1208,13 @@ def run_chat(cid, text, anchor, frames_dir):
                          if crop else "")
                 if crop:
                     blocks.append(img_block(crop))
+            elif dispute:               # disputed reading: re-read at full resolution
+                blocks.append(img_block(frames_dir / img))
+                st.hit("zoom")
+        if dispute:
+            anchor_note += DISPUTE_NOTE
+            SESSION.event("dispute", text=text[:160], problem=label)
+            print(f"dispute ({label}): full-res re-read armed")
         prompt = CHAT_PROMPT.format(anchor_note=anchor_note, problem=problem,
                                     last_on_page=on_page, last_checks=notes,
                                     thread=thread, asks=asks, text=text)
