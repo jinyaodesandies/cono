@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cono check</title>
+<title>Cono</title>
 <style>
   :root {
     /* The Study Lamp — a warm pool of lamplight on a night desk.
@@ -506,7 +506,7 @@
     </g>
     <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="#b58b43"/>
     <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="none" stroke="rgba(242,237,227,0.25)" stroke-width="0.6"/>
-  </svg>Cono check</h1>
+  </svg>Cono</h1>
   <span class="demo-mark" id="demomark" hidden>demo</span>
   <span class="viewtoggle" id="viewtoggle" role="tablist" aria-label="View" hidden>
     <button class="vt" data-view="twin" type="button" role="tab">Twin</button>
@@ -516,7 +516,7 @@
   <span class="rec" id="rec" hidden></span>
 </header>
 
-<div id="banner" role="status">Lost the local server — restart cono-check in your terminal.</div>
+<div id="banner" role="status">Lost the local server — restart cono in your terminal.</div>
 
 <main>
   <!-- the digital twin of the page -->
@@ -1114,7 +1114,7 @@
     showOffline([lost ? "The Desk View camera dropped out." : "Waiting for the Desk View camera.",
       "Lock your iPhone and set it back on the lid, rear cameras facing you — Cono picks " +
       "up again by itself, or hit Reconnect to look for it now. Black picture? See the iPhone tips under the camera view. " +
-      "(No iPhone handy? Restart as `cono-check browser`.)"],
+      "(No iPhone handy? Restart as `cono browser`.)"],
       resumeDeskView, "Reconnect");
     el("caption").textContent = "";
   }
@@ -1797,7 +1797,7 @@
       showOffline(["The Desk View camera couldn't run.",
         s.cap_error + " Close other camera apps, or allow camera access for your " +
         "terminal app in System Settings → Privacy & Security → Camera — then try again. " +
-        "(No Desk View on this Mac? Restart as `cono-check browser` to use an iPhone or webcam.)"],
+        "(No Desk View on this Mac? Restart as `cono browser` to use an iPhone or webcam.)"],
         async () => {
           const r = await fetch("/camera/retry", { method: "POST" });
           if (r.ok) {

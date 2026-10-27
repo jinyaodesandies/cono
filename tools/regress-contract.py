@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
-loader = importlib.machinery.SourceFileLoader("cc", str(HERE / "cono-check"))
+loader = importlib.machinery.SourceFileLoader("cc", str(HERE / "cono"))
 spec = importlib.util.spec_from_loader("cc", loader)
 cc = importlib.util.module_from_spec(spec)
 loader.exec_module(cc)

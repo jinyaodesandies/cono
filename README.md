@@ -1,4 +1,4 @@
-# Cono check
+# Cono
 
 Point the Mac's Desk View camera at your handwritten work and get a live
 **digital twin of your page**: the problem you're on pinned as a card, the
@@ -18,14 +18,14 @@ No camera needed — this replays a bundled sample session (a student
 factoring a quadratic, with a mistake in it) through the full pipeline:
 
 ```bash
-git clone https://github.com/jinyaodesandies/cono-check && cono-check/cono-check demo
+git clone https://github.com/jinyaodesandies/cono && cono/cono demo
 ```
 
 Your browser opens to the session; within seconds the twin fills in —
 problem card, relations, readability map — and the first note lands in
 the dialogue, pointing at the factoring error without giving away the
 fix. Type back at it, or click a spot on the page image to ask about
-exactly that spot. There's a chemistry version too — `cono-check demo
+exactly that spot. There's a chemistry version too — `cono demo
 chem` replays a stoichiometry page with a mis-balanced equation and a
 significant-figures slip.
 
@@ -35,9 +35,14 @@ installed and logged in (`claude` does the reading — no API key setup).
 ## Use it on your own work
 
 ```bash
-cono-check/cono-check            # the Desk View camera — top-down on your page
-cono-check/cono-check browser    # fallback: any camera the browser can see
+cono/cono            # the Desk View camera — top-down on your page
+cono/cono browser    # fallback: any camera the browser can see
 ```
+
+> **Renamed:** the executable used to be `cono-check`. A deprecated
+> compatibility shim with the old name still forwards to `cono` so
+> existing scripts and PATH symlinks keep working, but it will be
+> removed — switch to `cono`.
 
 **Desk View is the default and the point**: the Mac's top-down desk
 camera (built in on M4-and-later Macs) watches the page lying flat where
@@ -46,7 +51,7 @@ Browsers can't open that camera, so this mode captures through `deskcap`,
 a small Swift tool that builds itself from the bundled source on first
 run (needs the Xcode command line tools: `xcode-select --install`), and
 your terminal app needs camera permission — macOS asks once. If the build
-fails, `cono-check doctor` prints the compiler's actual complaint and the
+fails, `cono doctor` prints the compiler's actual complaint and the
 fix — usually a stale file left behind by an older Command Line Tools
 install. The camera view sits at the side as a framing aid — the twin is
 the main event — and the video is display-only and never leaves your
@@ -75,7 +80,7 @@ so this is also the way to reset it.
    Cono, pick the iPhone as the camera in FaceTime — if that is black
    too, restart both devices with Wi-Fi and Bluetooth on.
 
-**Browser mode** (`cono-check browser`) is the fallback for Macs without
+**Browser mode** (`cono browser`) is the fallback for Macs without
 Desk View — it works with any camera the browser can see:
 the built-in one (hold the page up facing the screen), a webcam, or an
 iPhone near your Mac via Continuity Camera — pick one from the camera
@@ -88,22 +93,22 @@ wait, and a "Pause camera" button that turns the camera fully off — in
 Desk View mode it stops the capture tool, and Continue starts it again.
 
 Before taking it somewhere that matters (class, a tutoring session),
-run `cono-check doctor` — a ten-second preflight that verifies the
+run `cono doctor` — a ten-second preflight that verifies the
 `claude` CLI (and its streaming support), the capture tool, Desk View,
 and camera permission, with a fix suggestion for anything that fails.
 
 Other flags:
 
 ```bash
-cono-check --model opus          # pick the model (default: opus)
-cono-check --replay DIR          # replay any recorded session directory
-cono-check --port 9000           # serve somewhere else (default: 8764)
-cono-check --contrast strong     # writing clarity: off | auto (default) | strong
-cono-check --no-contrast         # same as --contrast off
-cono-check --no-record           # testdev opt-out: run live without recording
-cono-check --dev                 # start in dev mode (show instrumentation)
-cono-check --view ambient        # start in the ambient face (default: twin)
-cono-check --no-open             # don't open the browser automatically
+cono --model opus          # pick the model (default: opus)
+cono --replay DIR          # replay any recorded session directory
+cono --port 9000           # serve somewhere else (default: 8764)
+cono --contrast strong     # writing clarity: off | auto (default) | strong
+cono --no-contrast         # same as --contrast off
+cono --no-record           # testdev opt-out: run live without recording
+cono --dev                 # start in dev mode (show instrumentation)
+cono --view ambient        # start in the ambient face (default: twin)
+cono --no-open             # don't open the browser automatically
 ```
 
 ## The twin
@@ -315,7 +320,7 @@ a side-by-side `report.md`; needs Pillow (`pip install pillow`) and
 costs real `claude` calls.
 
 Handy: symlink it onto your PATH so it's one word from anywhere:
-`ln -s "$PWD/cono-check/cono-check" /opt/homebrew/bin/cono-check`
+`ln -s "$PWD/cono/cono" /opt/homebrew/bin/cono`
 
 ## What gets sent where
 
@@ -358,7 +363,7 @@ transcription that preserves your errors, a one-line tally re-running
 any counting the judgment depends on, the hint-first check, the
 readability grid, and the relations — and the server parses it
 incrementally, pushing partial text and twin updates to the browser over
-server-sent events (`/events`). The server (`cono-check`, one Python
+server-sent events (`/events`). The server (`cono`, one Python
 file, stdlib only) stores snaps, runs the `claude` CLI, and serves the
 page. The sample session in `sample/` was generated by
 `tools/make-sample.py`.

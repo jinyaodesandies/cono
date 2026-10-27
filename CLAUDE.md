@@ -24,13 +24,13 @@
   README is the product's front door: if you touch flags, modes, the
   pipeline, requirements, or the UI's behavior, fix the README before
   you're done. Keep its usage examples matching the docstring in
-  `cono-check` — they drift independently otherwise.
-- The one-line try in the README (`cono-check demo`) must keep working
+  `cono` — they drift independently otherwise.
+- The one-line try in the README (`cono demo`) must keep working
   for a fresh clone with only Python 3 + the `claude` CLI: no camera, no
   Xcode, no pip installs, no JS build step.
 - Live capture is browser-side (getUserMedia + client gating); the
   server only receives snaps and runs `claude`. Keep gating thresholds
-  in index.html and cono-check in sync (DIRTY_AT 0.20 / STABLE_AT 0.10,
+  in index.html and cono in sync (DIRTY_AT 0.20 / STABLE_AT 0.10,
   GATE_SPREAD 100, the skin-hold floor +0.03 / 15 s timeout).
 - **Never binarize** a snap in any clarity pass — thresholding breaks
   faint graphite (measured; standing constraint from report 18 / the
@@ -60,8 +60,13 @@
   variant).
 - Checks remember the page via STATE.last_on_page/last_checks; stuck
   nudges fire after STUCK_S (env CONO_STUCK_S for tests) of quiet.
-- `cono-check doctor` is the preflight; keep it passing after changes.
-- Test end-to-end cheaply: `cono-check demo` / `demo chem`, POST session
+- `cono doctor` is the preflight; keep it passing after changes.
+- The executable is `cono` (renamed from `cono-check`, 2026-10-27).
+  `cono-check` is a committed deprecation shim that execs `cono` —
+  keep it working until collaborators' rigs have migrated. Machine-compat
+  names stay stable through the rename: CONO_* env vars, session bundle
+  field names, and `~/deskcap` paths are unchanged.
+- Test end-to-end cheaply: `cono demo` / `demo chem`, POST session
   snaps from `~/deskcap/session-*/snaps/` to /snap, and the stub capture
   tool pattern (CONO_DESKCAP env) for deskview flows.
 - This directory is its own git repo (published separately); the

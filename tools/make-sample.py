@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate sample/ — a synthetic deskcap session for `cono-check demo`.
+"""Regenerate sample/ — a synthetic deskcap session for `cono demo`.
 
 Six frames of a student factoring a quadratic on notebook paper, written
 line by line, with a planted sign error in the factoring step: the check
