@@ -161,9 +161,16 @@ Current problem: {problem}{pin_note}
 Earlier reading of the student's handwriting:
 {last_on_page}
 Your recent notes to the student (do not repeat these):
-{last_checks}{thread}
+{last_checks}{advice}{thread}
 If the page has flipped to a different sheet, treat it as fresh context and name the new page in WORKING ON.
 """
+
+ADVICE_BLOCK = """
+Advice you have ALREADY given on this problem (never give any of it again, even reworded; if the same issue still stands, move ONE rung up the ladder - a guiding question becomes one worked step - or say something genuinely new; if you can no longer verify the issue from the image at high confidence, drop it and build on what the student wrote):
+{lines}"""
+
+REPEAT_NOTE = """
+You have pointed at the same thing more than once and the student has not changed it. Re-verify that premise from the image at full attention this check. If you can still see it clearly, escalate: give ONE worked step toward fixing it, not the hint again. If you cannot verify it at high confidence, your reading may be the wrong one - concede: do not restate the advice; comment on something else or set KIND to "idle"."""
 
 THREAD_BLOCK = """
 Recent conversation with the student about this problem:
@@ -277,6 +284,11 @@ class State:
         self.msg_id = 0                 # ids for checks + chat messages (SSE correlation)
         self.contrast = "auto"          # writing clarity on snaps: off | auto | strong
         self.snap_enh = {}              # live mode: snap name -> pass the browser applied
+        # --- trust & dialogue (batch 2) ---
+        self.advice_log = {}            # label -> [{"toks","text","n"}]: advice already given (dedup)
+        self.cant_resolve = {}          # label -> consecutive checks that flagged an unreadable fact
+        self.disputes = {}              # label -> True once the student disputed our reading
+        self.misfires = 0               # "nothing new" claims suppressed against a changing page
 
     def thread(self):
         label = (self.problem or {}).get("label")
@@ -789,6 +801,87 @@ def claude_stream(blocks, model, on_text=None, timeout=120):
     return text, first
 
 
+STOPWORDS = frozenset(
+    "a an and are at be but by do does for from had has have how i if in is it its me my of on or "
+    "so that the their then there this to was we what when where which why will with you your".split())
+
+
+def advice_toks(text):
+    """Content-word token set, for advice-dedup and dispute similarity."""
+    return {w for w in re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split()
+            if w not in STOPWORDS}
+
+
+def tok_sim(a, b):
+    """Similarity of two content-word sets: Jaccard, or the overlap
+    coefficient when one phrasing is a tightened rewording of the other
+    (paraphrases keep the content words and shed the connective tissue)."""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    return max(inter / len(a | b), inter / min(len(a), len(b)) * 0.8)
+
+
+NOTHING_NEW_RE = re.compile(
+    r"\b(nothing new|no new (handwriting|writing|work|ink|answers?)|"
+    r"same (work|page|writing) as before|no (visible )?changes? since|"
+    r"blank (printed )?(worksheet|page)|hasn'?t (written|started)|"
+    r"no (student )?(work|answers?|handwriting) (is |has been )?(yet )?(visible|written))", re.I)
+
+
+def guard_check(entry, reason):
+    """Post-parse trust guards (called under STATE.lock).
+
+    Nothing-new guard: a note that references no new ink never becomes a
+    dialogue card - it is demoted to the quiet line; and a "nothing new"
+    claim on a snap that was taken BECAUSE the page-change signal fired is
+    a misfire - suppressed outright and logged (the diff that triggered
+    the snap is the ground truth that something changed).
+
+    Advice dedup: the said-it-already registry. The same advice (content-
+    word similarity >= 0.6 against what was already said on this problem)
+    is delivered at most twice; from the second delivery the next check's
+    prompt carries an escalate-or-concede order (REPEAT_NOTE), and a third
+    identical nudge is suppressed server-side to a quiet ack. Fifteen
+    identical nudges (session 194928) must be impossible.
+    """
+    label = (entry.get("problem") or STATE.problem or {}).get("label")
+    text = entry.get("check") or ""
+    claims_nothing = bool(NOTHING_NEW_RE.search(text)) or \
+        (entry.get("working_on") or "").strip().lower() == "nothing new"
+    if claims_nothing and reason in ("page settled", "checking in"):
+        entry["suppressed"] = "misfire"
+        entry["kind"] = "idle"
+        entry["check"] = ""
+        STATE.misfires += 1
+        SESSION.event("nothing_new_misfire", snap=entry.get("snap"),
+                      reason=reason, said=text[:160])
+        print(f"suppressed misfire ({entry.get('snap')}): \"nothing new\" on a page the diff saw change")
+        return
+    if entry.get("kind") in ("confirm", "fix") and claims_nothing \
+            and reason not in USER_REASONS and reason != "stuck?":
+        entry["suppressed"] = "nothing-new"
+        entry["kind"] = "idle"          # quiet line at most, never a note card
+    if entry.get("kind") == "fix" and label and text:
+        toks = advice_toks(text)
+        log = STATE.advice_log.setdefault(label, [])
+        hit = next((e for e in log if tok_sim(toks, e["toks"]) >= 0.6), None)
+        if hit is None:
+            log.append({"toks": toks, "text": text, "n": 1})
+        else:
+            hit["n"] += 1
+            hit["toks"] |= toks         # the paraphrase family grows with each variant
+            entry["repeat_n"] = hit["n"]
+            # a third identical nudge is forbidden (a user-requested check is
+            # never left empty-handed - the ladder escalates it prompt-side)
+            if hit["n"] >= 3 and reason not in USER_REASONS:
+                entry["suppressed"] = "repeat"
+                entry["kind"] = "idle"
+                entry["check"] = f"still on {label} - the earlier note stands"
+                SESSION.event("advice_suppressed", n=hit["n"], said=text[:160])
+                print(f"suppressed repeat x{hit['n']} ({label}): {text[:60]}")
+
+
 def fmt_problem(p):
     if not p:
         return "(not identified yet)"
@@ -806,6 +899,11 @@ def build_context():
     tblock = THREAD_BLOCK.format(lines=fmt_thread(thread)) if thread else ""
     if not (STATE.last_on_page or STATE.last_checks or STATE.problem):
         return ""
+    label = (STATE.problem or {}).get("label")
+    advice = STATE.advice_log.get(label, [])
+    ablock = ADVICE_BLOCK.format(lines="\n".join(
+        f"- {e['text']}" + (f" (said {e['n']} times)" if e["n"] > 1 else "")
+        for e in advice[-6:])) if advice else ""
     return CONTEXT_BLOCK.format(
         problem=fmt_problem(STATE.problem),
         questions=QUESTIONS_BLOCK.format(qlist="\n".join(
@@ -813,6 +911,7 @@ def build_context():
         pin_note=PIN_NOTE.format(pin=STATE.pinned_label) if STATE.pinned_label else "",
         last_on_page=STATE.last_on_page[:1200] or "(none yet)",
         last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
+        advice=ablock,
         thread=tblock,
     )
 
@@ -875,6 +974,12 @@ def checker(frames_dir):
             if reason == "asked" and STATE.problem:
                 label = STATE.problem["label"]
                 STATE.asks[label] = STATE.asks.get(label, 0) + 1
+            cur_label = (STATE.problem or {}).get("label")
+            # advice given twice and not acted on: the next check must escalate
+            # or concede, never restate (the perception-dispute protocol's
+            # non-compliance arm — see also guard_check)
+            repeat_hot = any(e["n"] >= 2 for e in STATE.advice_log.get(cur_label, []))
+            disputed = STATE.disputes.get(cur_label, False)
         in_session = SESSION.active
         cfg = SESSION.next_config() if in_session else \
             {"style": "question", "structure": "stream", "width": 960}
@@ -890,6 +995,8 @@ def checker(frames_dir):
         extra = ESCALATION if reason == "asked" else \
                 STUCK_NOTE if reason == "stuck?" else \
                 NEXT_NOTE.format(label=next_from or "the current problem") if reason == "next" else ""
+        if repeat_hot or disputed:
+            extra += REPEAT_NOTE
         last_push = [0.0]
 
         def push(text):                 # stream partial CHECK text to the browser
@@ -925,6 +1032,7 @@ def checker(frames_dir):
                                        STATE.model, on_text=push)
             entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
+                guard_check(entry, reason)      # trust guards: dedup + nothing-new
                 absorb_twin(entry, snap, next_from=next_from)
                 if entry.get("check") and entry.get("kind") in ("confirm", "fix"):
                     STATE.last_checks = (STATE.last_checks + [entry["check"]])[-3:]
@@ -958,6 +1066,8 @@ def checker(frames_dir):
                       "stages": entry.get("stages", []),
                       "problem": (entry.get("problem") or {}).get("label", ""),
                       "visibility": entry.get("visibility"),
+                      "suppressed": entry.get("suppressed"),
+                      "repeat_n": entry.get("repeat_n"),
                       "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
                       "raw": raw, "annotation": None}
             with SESSION.lock:

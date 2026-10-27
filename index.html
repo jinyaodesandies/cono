@@ -1219,7 +1219,9 @@
     }
     // the latest quiet acknowledgment (idle/setup) lives under the dialogue
     const quiet = (s.checks || []).find(c => !c.failed);
-    if (quiet && (quiet.kind === "idle" || quiet.kind === "setup")
+    if (quiet && quiet.suppressed === "misfire" && quiet === (s.checks || [])[0]) {
+      el("quietline").hidden = true;    // a misfired claim shows nothing at all
+    } else if (quiet && (quiet.kind === "idle" || quiet.kind === "setup")
         && quiet === (s.checks || [])[0]) {
       const txt = quiet.kind === "setup"
         ? (quiet.check || quiet.visibility_note || "Fix the framing — see the readability map.")
@@ -1234,7 +1236,7 @@
   // ---------- history (earlier notes) ----------
   function histHTML(c) {
     if (c.kind === "idle" || c.kind === "setup")
-      return `<div class="hist"><div class="meta"><span>${esc(c.time)} · ${esc((c.check || c.visibility_note || "").slice(0, 120))}</span></div></div>`;
+      return `<div class="hist"><div class="meta"><span>${esc(c.time)} · ${esc((c.check || c.visibility_note || "").slice(0, 120))}${devMode && c.suppressed ? " · suppressed: " + esc(c.suppressed) : ""}</span></div></div>`;
     const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img src="/snap/${esc(c.snap)}" alt="snapshot"></a>` : "";
     return `<div class="hist ${esc(c.kind || "")}">
       <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}${c.problem_label ? " · " + esc(c.problem_label) : ""}${devMode && c.ms ? " · " + (c.ms / 1000).toFixed(1) + "s" : ""}${devMode && c.contrast ? " · " + esc(c.contrast) : ""}</span></div>
