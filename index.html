@@ -438,6 +438,11 @@
   .hist.fix .say::before { content: "✎ "; color: var(--lamp); }
   .hist .retry { color: var(--lamp); cursor: pointer; background: none; border: none; font-size: 13px; padding: 0; text-decoration: underline; }
   details.read summary { color: var(--faded); font-size: 12.5px; cursor: pointer; }
+  details.phonehelp { margin: 10px 0 0; max-width: 56ch; }
+  details.phonehelp summary { color: var(--faded); font-size: 13px; cursor: pointer; }
+  details.phonehelp ol { margin: 10px 0 0 22px; color: var(--faded); font-size: 13.5px; line-height: 1.5; }
+  details.phonehelp li { margin-bottom: 8px; }
+  details.phonehelp b { color: var(--paper); font-weight: 600; }
   details.read .onpage {
     font-family: Charter, Georgia, serif;
     font-size: 13.5px;
@@ -560,6 +565,7 @@
       <div class="controls">
         <button class="pill" id="checknow" type="button" disabled>Check now</button>
         <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
+        <button class="quiet" id="reframebtn" type="button" hidden>Re-frame Desk View</button>
         <button class="quiet" id="contrastbtn" type="button" hidden
           title="Clarity pass on snapshots before reading — auto stretches contrast, strong lifts faint strokes">writing clarity: auto</button>
         <button class="quiet" id="stagebtn" type="button" hidden
@@ -569,6 +575,21 @@
         <button class="quiet" id="devbtn" type="button" hidden
           title="Show the test instrumentation (stage trace, clarity control, latency tags)">dev</button>
       </div>
+      <details class="phonehelp" id="phonehelp" hidden>
+        <summary>Using an iPhone as the Desk View camera</summary>
+        <ol>
+          <li><b>Turn on Continuity Camera</b> on the phone (Settings → General → AirPlay &amp; Continuity),
+            then lock it and set it on the lid, landscape, rear cameras facing you. The phone has to stay
+            locked with the screen off — unlock it or pick it up and the feed stops.</li>
+          <li><b>Desk View opens but the picture is black?</b> The phone is connected but sending no video.
+            Make sure the mount or case isn't covering the rear lenses (Desk View uses the ultra-wide one),
+            and that the phone isn't in Low Power Mode or very low on battery — it stays listed as a camera
+            but stops sending frames.</li>
+          <li><b>Still black:</b> toggle Continuity Camera off, lock the phone, wait ten seconds, and toggle it
+            back on. To check it's the phone and not Cono, pick the iPhone as the camera in FaceTime — if
+            that's black too, restart both devices with Wi-Fi and Bluetooth on.</li>
+        </ol>
+      </details>
       <div id="sessionpanel" hidden></div>
     </figure>
 
@@ -696,10 +717,10 @@
     fillPicker();
   }
 
-  function showOffline([head, body], retryFn) {
+  function showOffline([head, body], retryFn, label = "Try again") {
     const o = el("offline");
     o.innerHTML = `<h2>${esc(head)}</h2><p>${esc(body)}</p>` +
-                  (retryFn ? `<button class="pill" id="retrycam" type="button">Try again</button>` : "");
+                  (retryFn ? `<button class="pill" id="retrycam" type="button">${esc(label)}</button>` : "");
     o.style.display = "block";
     el("video").hidden = true;
     if (retryFn) el("retrycam").onclick = retryFn;
@@ -724,9 +745,60 @@
 
   function stopTracks() { stream?.getTracks().forEach(t => t.stop()); stream = null; }
 
+  // Desk View: pausing stops the capture tool; Continue (or Reconnect, while
+  // the camera is away) launches a fresh one, which also re-discovers the iPhone.
+  async function pauseDeskView() {
+    const r = await fetch("/camera/pause", { method: "POST" });
+    if (!r.ok) { paused = false; return; }
+    document.body.classList.add("paused");
+    el("pausebtn").textContent = "Continue";
+    el("pausebtn").className = "pill resume";
+    showOffline(["Paused — the Desk View camera is off.",
+      "Nothing is watched or sent. Hit Continue to pick up where you left off."], resumeDeskView, "Continue");
+    el("caption").textContent = "";
+    setStatus();
+  }
+  async function resumeDeskView() {
+    const r = await fetch("/camera/retry", { method: "POST" });
+    if (!r.ok) return;
+    paused = false;
+    poll.capErrShown = false;
+    camWaiting = false;
+    document.body.classList.remove("paused");
+    el("pausebtn").textContent = "Pause camera";
+    el("pausebtn").className = "quiet";
+    showOffline(["Connecting to the Desk View camera…", "Lock your iPhone and set it on the lid, rear cameras facing you. " +
+      "Black picture? See the iPhone tips under the camera view."]);
+    camRefresh = true;          // next /state decides: live picture, or still waiting
+    setStatus();
+  }
+
+  // Apple's Desk View app owns the desk crop. Re-framing opens it in set-up mode
+  // (full ultra-wide view + the trapezoid that becomes the frame); capture
+  // resumes by itself once the user starts Desk View from that window.
+  let camReframing = false;
+  el("reframebtn").addEventListener("click", async () => {
+    if (camBusy || camReframing) return;
+    const r = await fetch("/camera/reframe", { method: "POST" });
+    if (!r.ok) return;
+    camReframing = true;
+    sessionEvent("reframe");
+    showOffline(["Re-framing in Apple's Desk View window.",
+      "Drag the corners of the trapezoid around your page, then click Start Desk View. " +
+      "Cono picks up the new framing by itself."], () => { camReframing = false; resumeDeskView(); }, "Skip");
+    el("caption").textContent = "";
+  });
+
+  let camBusy = false;          // one pause/continue request at a time (a double-click must not undo itself)
   el("pausebtn").addEventListener("click", () => {
+    if (camBusy) return;
     paused = !paused;
     if (session) { session.paused = paused; sessionEvent(paused ? "pause" : "resume"); }
+    if (mode === "deskview") {
+      camBusy = true;
+      (paused ? pauseDeskView() : resumeDeskView()).finally(() => { camBusy = false; });
+      return;
+    }
     if (paused) {
       stopTracks();
       document.body.classList.add("paused");
@@ -938,6 +1010,30 @@
       loader.onerror = () => { waiting = false; };   // no frame yet: retry
       loader.src = "/live.jpg?n=" + Date.now();
     }, 160);
+  }
+
+  // The Desk View camera comes and goes with the iPhone (unlocked, picked up,
+  // wandered off). deskcap waits and reattaches; the page just says so and
+  // brings the picture back when frames resume.
+  const DESKVIEW_CAPTION = "Live from the Desk View camera — frame your page here.";
+  let camWaiting = false;
+  let camRefresh = false;
+  function showCamWaiting(msg) {
+    if (!camWaiting) sessionEvent("camera_lost");
+    camWaiting = true;
+    const lost = /^lost/.test(msg || "");
+    showOffline([lost ? "The Desk View camera dropped out." : "Waiting for the Desk View camera.",
+      "Lock your iPhone and set it back on the lid, rear cameras facing you — Cono picks " +
+      "up again by itself, or hit Reconnect to look for it now. Black picture? See the iPhone tips under the camera view. " +
+      "(No iPhone handy? Restart as `cono-check browser`.)"],
+      resumeDeskView, "Reconnect");
+    el("caption").textContent = "";
+  }
+  function showCamBack() {
+    camWaiting = false;
+    camRefresh = false;
+    el("offline").style.display = "none";
+    el("caption").textContent = DESKVIEW_CAPTION;
   }
 
   // ---------- replay mode stage ----------
@@ -1550,7 +1646,10 @@
         el("pausebtn").hidden = false;
         startCamera();
       } else if (mode === "deskview") {
-        el("caption").textContent = "Live from the Desk View camera — frame your page here.";
+        el("pausebtn").hidden = false;
+        el("reframebtn").hidden = false;
+        el("phonehelp").hidden = false;
+        el("caption").textContent = DESKVIEW_CAPTION;
         el("checknow").disabled = false;
         startLivePoll();
       } else {
@@ -1564,7 +1663,21 @@
       if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
     }
     if (mode !== "live" && s.status === "watching") manualPending = false;
-    if (mode === "deskview" && s.cap_error && !poll.capErrShown) {
+    if (mode === "deskview" && camReframing && !s.cap_reframing) {   // set-up window closed
+      camReframing = false;
+      camRefresh = true;
+      if (!s.cap_error && !s.cap_waiting) showCamBack();
+    }
+    if (mode === "deskview" && !s.cap_error && !paused && !camReframing) {
+      if (s.cap_waiting && (!camWaiting || camRefresh)) showCamWaiting(s.cap_waiting);
+      else if (!s.cap_waiting && (camWaiting || camRefresh)) showCamBack();
+      camRefresh = false;
+    }
+    if (mode === "deskview" && !s.cap_error && !paused && poll.capErrShown) {   // server relaunched deskcap itself
+      poll.capErrShown = false;
+      showCamBack();
+    }
+    if (mode === "deskview" && s.cap_error && !paused && !poll.capErrShown) {
       poll.capErrShown = true;
       showOffline(["The Desk View camera couldn't run.",
         s.cap_error + " Close other camera apps, or allow camera access for your " +
@@ -1574,8 +1687,9 @@
           const r = await fetch("/camera/retry", { method: "POST" });
           if (r.ok) {
             poll.capErrShown = false;
+            camWaiting = false;
             el("offline").style.display = "none";
-            el("caption").textContent = "Live from the Desk View camera — frame your page here.";
+            el("caption").textContent = DESKVIEW_CAPTION;
             startLivePoll();
           }
         });
