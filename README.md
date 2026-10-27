@@ -226,7 +226,9 @@ trip), extended thinking is off — replaced by a one-line visible "tally"
 (atom counts, unit chains, sig figs recomputed digit by digit) that the
 feedback must agree with — and frames are downscaled to 960 px for
 reading while originals stay on disk. Automatic snaps still never come
-faster than one per 5 s.
+faster than one per 5 s, and a check that has produced nothing for 20
+seconds is killed and retried once — one slow outlier never becomes a
+39-second wait.
 
 And the cone: the little 3D cone in the header (Cono, cone) spins while
 a check or chat reply is being read and rests when the desk is quiet —
@@ -282,7 +284,10 @@ pen-point, Next press and suggestion, per-check latency, stage and
 clarity metadata, and the page-change signal.
 
 **"End & rate" is the data engine**: ending the session walks you
-through rating each note (Helped / Didn't help / Wrong — skippable) and
+through rating each note (Helped / Didn't help / Wrong — skippable;
+Wrong takes a one-tap sublabel, "misread the page" or "read it fine,
+advice wrong", so misreads become labeled ground truth instead of
+free-text notes) and
 two short questions, then offers one-click **Delete this session** (or
 "Record again"). Quitting the server mid-session still writes a
 complete, scoreable bundle. Nothing leaves this machine beyond the

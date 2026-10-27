@@ -490,7 +490,8 @@
   .panel .checkview { display: flex; gap: 14px; margin: 12px 0; }
   .panel .checkview img { height: 76px; border-radius: 4px; }
   .panel .checkview .note { font-size: 14px; color: var(--paper); max-width: 44ch; }
-  .panel .verdicts button.on { border-color: var(--lamp); color: var(--lamp); }
+  .panel .verdicts button.on, .panel .wrongkind button.on { border-color: var(--lamp); color: var(--lamp); }
+  .panel .verdicts [data-v=wrong].on, .panel .wrongkind button.on { border-color: var(--clay); color: var(--clay); }
   .framingline { color: var(--lamp); font-size: 13px; margin-top: 6px; }
 </style>
 </head>
@@ -1180,7 +1181,7 @@
     if (m.who === "you")
       return `<div class="msg you">${chemHTML(m.text)}</div>`;
     const thumb = m.snap && m.kind !== "chat"
-      ? `<a href="/snap/${esc(m.snap)}" target="_blank" rel="noopener"><img class="mthumb" src="/snap/${esc(m.snap)}" alt="snapshot read"></a>` : "";
+      ? `<a href="/snap/${esc(m.snap)}" target="_blank" rel="noopener"><img class="mthumb" loading="lazy" decoding="async" src="/snap/${esc(m.snap)}" alt="snapshot read"></a>` : "";
     return `<div class="msg cono ${esc(m.kind || "")}">
       <span class="mtext">${chemHTML(m.text)}</span><span class="mtime">${esc(m.time || "")}</span>${thumb}
       ${isLast ? `<div><button type="button" class="morebtn" id="explainmore">explain more</button></div>` : ""}
@@ -1211,7 +1212,11 @@
       html += `<div class="pendingline"><img src="/snap/${esc(p.id)}" alt="">
         <span><span class="lampdot checking"></span>reading your page… ${sec}s</span></div>`;
     });
-    if (html) {
+    // a DOM rebuild mid-click eats the click (the "pressed it twice" retries
+    // in the pointing logs) and re-decodes every thumbnail — skip identical
+    // renders entirely
+    if (html && html !== renderDialogue.last) {
+      renderDialogue.last = html;
       el("dialogue").innerHTML = html;
       const more = el("explainmore");
       if (more) more.addEventListener("click", explainMore);
@@ -1237,7 +1242,7 @@
   function histHTML(c) {
     if (c.kind === "idle" || c.kind === "setup")
       return `<div class="hist"><div class="meta"><span>${esc(c.time)} · ${esc((c.check || c.visibility_note || "").slice(0, 120))}${devMode && c.suppressed ? " · suppressed: " + esc(c.suppressed) : ""}</span></div></div>`;
-    const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img src="/snap/${esc(c.snap)}" alt="snapshot"></a>` : "";
+    const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="/snap/${esc(c.snap)}" alt="snapshot"></a>` : "";
     return `<div class="hist ${esc(c.kind || "")}">
       <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}${c.problem_label ? " · " + esc(c.problem_label) : ""}${devMode && c.ms ? " · " + (c.ms / 1000).toFixed(1) + "s" : ""}${devMode && c.contrast ? " · " + esc(c.contrast) : ""}</span></div>
       <p class="say">${chemHTML(c.check || "")}</p>
@@ -1250,7 +1255,10 @@
     if (!checks.length) return;
     el("historybox").hidden = false;
     el("historysum").textContent = `earlier notes (${checks.length})`;
-    el("history").innerHTML = checks.map(histHTML).join("");
+    const html = checks.map(histHTML).join("");
+    if (html === renderHistory.last) return;   // identical: keep the DOM (and its decoded images)
+    renderHistory.last = html;
+    el("history").innerHTML = html;
     el("history").querySelectorAll(".retry").forEach(b =>
       b.addEventListener("click", () => fetch("/retry?snap=" + encodeURIComponent(b.dataset.snap), { method: "POST" })));
   }
@@ -1493,7 +1501,7 @@
   }
 
   function attachRecorders() {          // live mode: the browser is the camera
-    session = { signal: [], paused, lastDense: 0, framingShown: false,
+    session = { signal: [], snaps: [], paused, lastDense: 0, framingShown: false,
                 checksAtStart: lastState ? lastState.checks.length : 0, timers: [] };
     session.timers.push(setInterval(async () => {   // dense page photos, thinned after 10 min
       if (session.paused || mode !== "live") return;
@@ -1551,7 +1559,7 @@
 
   function annotate(info) {
     const entries = (info.checks || [])
-      .map(c => ({ snap: c.snap, check: c.check, verdict: "", note: "" }));
+      .map(c => ({ snap: c.snap, check: c.check, verdict: "", wrong_kind: "", note: "" }));
     const p = el("sessionpanel");
     p.hidden = false;
     let i = 0;
@@ -1559,6 +1567,9 @@
     function stepCheck() {
       if (i >= entries.length) return stepStuck();
       const c = entries[i];
+      // "Wrong" is a first-class verdict: one click, with a one-tap misread
+      // sublabel — "it is not reading it right" must never need the free-text
+      // box again (70 corpus checks, zero Wrong uses, the label went to prose)
       p.innerHTML = `<div class="panel">
         <h2>Note ${i + 1} of ${entries.length}</h2>
         <div class="checkview"><img src="/snap/${c.snap}" alt="Snapshot for this note">
@@ -1567,12 +1578,24 @@
           <button class="pill" data-v="helped">Helped</button>
           <button class="pill" data-v="didnt">Didn’t help</button>
           <button class="pill" data-v="wrong">Wrong</button></div>
+        <div class="row wrongkind" id="aWrongKind" hidden>
+          <button class="pill small" data-w="misread">misread the page</button>
+          <button class="pill small" data-w="advice">read it fine, advice wrong</button></div>
         <div class="row"><input type="text" id="aNote" placeholder="What did you actually need here? (optional)"></div>
         <div class="row"><button class="quiet" id="aNext">Next</button>
         <button class="quiet" id="aSkip">Skip rating</button></div></div>`;
       p.querySelectorAll(".verdicts .pill").forEach(b => b.onclick = () => {
         c.verdict = b.dataset.v;
         p.querySelectorAll(".verdicts .pill").forEach(x => x.classList.toggle("on", x === b));
+        el("aWrongKind").hidden = c.verdict !== "wrong";
+        if (c.verdict !== "wrong") c.wrong_kind = "";
+        el("aNote").placeholder = c.verdict === "wrong"
+          ? "What did it get wrong, exactly? (optional)"
+          : "What did you actually need here? (optional)";
+      });
+      p.querySelectorAll(".wrongkind .pill").forEach(b => b.onclick = () => {
+        c.wrong_kind = b.dataset.w;
+        p.querySelectorAll(".wrongkind .pill").forEach(x => x.classList.toggle("on", x === b));
       });
       el("aNext").onclick = () => { c.note = el("aNote").value; i++; stepCheck(); };
       el("aSkip").onclick = () => saved();      // the bundle is already complete
