@@ -653,7 +653,8 @@
   let manualPending = false;
   let lastGate = null, dirtySince = 0, firstLookAt = 0, armed = false, lastSnapAt = 0;
   let lastActive = 0, stuckArmed = false;
-  const STUCK_MS = 120000;
+  let handFloor = null, handHoldSince = 0;  // hand-aware snap hold
+  const STUCK_MS = 120000, HAND_HOLD_MS = 15000;
   let lastFrameN = -1, failedAt = 0;
   let replayTop = null, replayUnder = null;
   let lastState = null;       // latest /state payload
@@ -826,6 +827,18 @@
     const gray = new Uint8Array(GATE_W * GATE_H);
     for (let i = 0; i < gray.length; i++)
       gray[i] = (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2]) / 3;
+    // hand detection for the snap hold: skin-tone fraction vs an adaptive
+    // floor (warm desks read as skin at a constant rate; the floor drifts up
+    // slowly so a permanently resting hand becomes the new normal)
+    let skin = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      if (r > 95 && g > 40 && b > 20 && r > g + 15 && r > b + 15) skin++;
+    }
+    const skinFrac = skin / (px.length / 4);
+    if (handFloor === null || skinFrac < handFloor) handFloor = skinFrac;
+    else handFloor = Math.min(handFloor + 0.0001, skinFrac);
+    const handIn = skinFrac > handFloor + 0.03;
     let changed = null;
     if (lastGate) {
       let n = 0;
@@ -841,9 +854,17 @@
     const elapsed = session ? (now - session.start) / 1000 : -1;
     const minGap = session ? (elapsed < 200 ? 5000 : elapsed < 400 ? 12000 : 20000) : MIN_GAP_MS;
     const gapOk = now - lastSnapAt >= minGap;
+    // hand-aware hold (57/70 corpus checks were shot through a hand): an
+    // automatic snap waits for a hand-free stable frame, at most 15 s —
+    // a resting hand never blocks checks forever
+    const wantSettle = dirtySince && changed !== null && changed < STABLE_AT && gapOk;
+    const wantOverdue = dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk;
+    if ((wantSettle || wantOverdue) && handIn && !handHoldSince) handHoldSince = now;
+    if (!handIn) handHoldSince = 0;
+    const holding = handIn && handHoldSince && now - handHoldSince < HAND_HOLD_MS;
     if (!armed && now >= firstLookAt) { armed = true; lastSnapAt = now; snap("first look"); }
-    else if (dirtySince && changed !== null && changed < STABLE_AT && gapOk) { dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
-    else if (dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk) { dirtySince = now; lastSnapAt = now; snap("checking in"); }
+    else if (wantSettle && !holding) { handHoldSince = 0; dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
+    else if (wantOverdue && !holding) { handHoldSince = 0; dirtySince = now; lastSnapAt = now; snap("checking in"); }
     else if (armed && stuckArmed && !dirtySince && now - Math.max(lastActive, lastSnapAt) > STUCK_MS) { stuckArmed = false; lastSnapAt = now; snap("stuck?"); }
     if (changed !== null && changed < STABLE_AT && !dirtySince) writing = false;
     setStatus();
@@ -919,6 +940,69 @@
     return true;
   }
 
+  // The adaptive clarity gate (measured, report 18): p95−p5 luminance spread
+  // below 100 marks a dim/flat frame that gets the waterfill pass; everything
+  // else gets the auto stretch. The gate decision travels as the enh tag.
+  const GATE_SPREAD = 100;
+  function lumSpread(ctx, w, h) {
+    const d = ctx.getImageData(0, 0, w, h).data;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4)
+      hist[(d[i] + 2 * d[i + 1] + d[i + 2]) >> 2]++;
+    const n = (w * h);
+    let lo = 0, acc = 0;
+    for (; lo < 255 && acc + hist[lo] < n * 0.05; lo++) acc += hist[lo];
+    let hi = 255; acc = 0;
+    for (; hi > 0 && acc + hist[hi] < n * 0.05; hi--) acc += hist[hi];
+    return hi - lo;
+  }
+
+  // Water-filling illumination flattening (ACCV 2018), mirroring the server's
+  // Pillow/numpy pass: the shading surface is the converged water level of a
+  // 4-neighbor diffusion over the 5×-downscaled luminance terrain (eta 0.2,
+  // decaying rain 0.01); reconstruct 0.85·g/bg. Grayscale out, continuous
+  // tones — NEVER thresholded (binarization breaks faint strokes).
+  function waterfillCanvas(ctx, w, h) {
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, n = w * h;
+    const g = new Float32Array(n);
+    for (let i = 0; i < n; i++) g[i] = (d[i * 4] + 2 * d[i * 4 + 1] + d[i * 4 + 2]) / 1020;
+    const sw = Math.max(2, Math.floor(w / 5)), sh = Math.max(2, Math.floor(h / 5));
+    const terrain = new Float32Array(sw * sh), cnt = new Float32Array(sw * sh);
+    for (let y = 0; y < h; y++) {                 // box-average downscale
+      const sy = Math.min(sh - 1, Math.floor(y * sh / h));
+      for (let x = 0; x < w; x++) {
+        const si = sy * sw + Math.min(sw - 1, Math.floor(x * sw / w));
+        terrain[si] += g[y * w + x]; cnt[si]++;
+      }
+    }
+    for (let i = 0; i < terrain.length; i++) terrain[i] /= cnt[i] || 1;
+    let wl = Float32Array.from(terrain), nx = new Float32Array(wl.length);
+    for (let t = 0; t < 300; t++) {               // diffusion + decaying rain
+      const rain = 0.01 * Math.exp(-t / 50);
+      for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+        const i = y * sw + x;
+        const up = wl[(y > 0 ? y - 1 : 0) * sw + x], dn = wl[(y < sh - 1 ? y + 1 : sh - 1) * sw + x];
+        const lf = wl[y * sw + (x > 0 ? x - 1 : 0)], rt = wl[y * sw + (x < sw - 1 ? x + 1 : sw - 1)];
+        const v = wl[i] + 0.2 * (up + dn + lf + rt - 4 * wl[i]) + rain;
+        nx[i] = v > terrain[i] ? v : terrain[i];  // water never below ground
+      }
+      [wl, nx] = [nx, wl];
+    }
+    for (let y = 0; y < h; y++) {                 // bilinear-ish upsample + reconstruct
+      const fy = Math.min(sh - 1.001, y * sh / h), y0 = Math.floor(fy), ty = fy - y0;
+      for (let x = 0; x < w; x++) {
+        const fx = Math.min(sw - 1.001, x * sw / w), x0 = Math.floor(fx), tx = fx - x0;
+        const bg = wl[y0 * sw + x0] * (1 - tx) * (1 - ty) + wl[y0 * sw + x0 + 1] * tx * (1 - ty)
+                 + wl[(y0 + 1) * sw + x0] * (1 - tx) * ty + wl[(y0 + 1) * sw + x0 + 1] * tx * ty;
+        const v = Math.min(255, Math.max(0, 0.85 * g[y * w + x] / Math.max(bg, 0.001) * 255));
+        const i = (y * w + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
   // "auto": histogram stretch on the snap canvas — find the 0.5% / 99.5%
   // luminance percentiles and map them to 0..255. A near-no-op on a
   // well-lit page, a real lift on faint pencil.
@@ -951,7 +1035,11 @@
     ctx.drawImage(v, 0, 0);
     let enh = "0";
     if (contrastMode === "strong" && clarifyStrong(ctx, c.width, c.height)) enh = "strong";
-    else if (contrastMode === "auto" && stretchContrast(ctx, c.width, c.height)) enh = "auto";
+    else if (contrastMode === "auto") {           // the adaptive clarity gate
+      if (lumSpread(ctx, c.width, c.height) < GATE_SPREAD
+          && waterfillCanvas(ctx, c.width, c.height)) enh = "waterfill";
+      else if (stretchContrast(ctx, c.width, c.height)) enh = "auto";
+    }
     const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
     if (!blob) return null;
     const url = "/snap?reason=" + encodeURIComponent(reason) +
@@ -1502,6 +1590,7 @@
 
   function attachRecorders() {          // live mode: the browser is the camera
     session = { signal: [], snaps: [], paused, lastDense: 0, framingShown: false,
+                start: performance.now() - sessionMs,   // align with the server's recording clock
                 checksAtStart: lastState ? lastState.checks.length : 0, timers: [] };
     session.timers.push(setInterval(async () => {   // dense page photos, thinned after 10 min
       if (session.paused || mode !== "live") return;

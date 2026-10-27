@@ -30,7 +30,13 @@
   Xcode, no pip installs, no JS build step.
 - Live capture is browser-side (getUserMedia + client gating); the
   server only receives snaps and runs `claude`. Keep gating thresholds
-  in index.html and cono-check in sync (DIRTY_AT 0.20 / STABLE_AT 0.10).
+  in index.html and cono-check in sync (DIRTY_AT 0.20 / STABLE_AT 0.10,
+  GATE_SPREAD 100, the skin-hold floor +0.03 / 15 s timeout).
+- **Never binarize** a snap in any clarity pass — thresholding breaks
+  faint graphite (measured; standing constraint from report 18 / the
+  photo-pipeline harness). Clarity passes stay grayscale/continuous.
+  And never send the model images wider than ~1280 px: the API clamps
+  at ~1.15 MP, so wider frames get resampled twice and read WORSE.
 - If the check prompt or gating thresholds change, rerun
   `tools/make-sample.py` only if the sample itself needs to change — the
   committed frames are the stable test fixture (`sample/` math,

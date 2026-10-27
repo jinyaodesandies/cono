@@ -153,26 +153,34 @@ model reads it, with three strengths you can switch mid-session from
 the "writing clarity" button (dev mode; `--contrast MODE` at start —
 handy when experimenting with different pens and pencils):
 
-- **auto** (default) — a global histogram stretch: a near-no-op on a
-  well-lit page, a real lift on faint pencil in dim classroom light.
-- **strong** — goes after faint strokes specifically: uneven lighting is
+- **auto** (default) — an adaptive gate, measured on the photo-pipeline
+  harness: a well-lit page gets a global histogram stretch (a near-no-op
+  on good light, a real lift on faint pencil), while a dim or flat frame
+  (luminance spread below the gate threshold) gets **waterfill**
+  illumination flattening — a published water-filling pass that rescues
+  dim pencil without thinning the strokes of bright pages the way the
+  strong pass does. The gate's decision is logged with every check.
+- **strong** — the manual heavy option (dev mode): uneven lighting is
   flattened first (a heavily blurred copy of the page is subtracted, so
   lamp falloff and page curvature cancel instead of being amplified),
   then the flattened image is contrast-stretched, mid-gray graphite is
   gamma-pushed toward black, and stroke edges get a mild sharpen —
-  grayscale output, since color is noise when reading handwriting. In
-  testing, a faint-pencil page the model mis-passed raw was caught
-  correctly after the strong pass.
+  grayscale output, since color is noise when reading handwriting.
 - **off** — snaps pass through untouched (`--no-contrast` still works).
 
+Every pass keeps continuous tones — nothing is ever binarized
+(thresholding destroys faint graphite; a standing, measured constraint).
 Browser-mode snaps are processed on the canvas before upload; Desk View
 and replay frames in place by the server when Pillow is installed
 (`pip install pillow` — optional, everything works without it, snaps
-just pass through unchanged). The stored snapshot, the thumbnail on
-each note, and what the model read are always the same pixels, and each
-check records which pass its snap got (`canvas-auto` / `canvas-strong` /
-`pillow-auto` / `pillow-strong` / `skip` / `off`) so session scores can
-compare clarity modes and writing implements across sessions.
+just pass through unchanged; `numpy`, also optional, enables the
+waterfill pass server-side — without it the gate falls back to strong).
+The stored snapshot, the thumbnail on each note, and what the model read
+are always the same pixels, and each check records which pass its snap
+got (`canvas-auto` / `canvas-waterfill` / `canvas-strong` /
+`pillow-auto` / `pillow-waterfill` / `pillow-strong` / `skip` / `off`)
+so session scores can compare clarity modes and writing implements
+across sessions — and validate the gate itself on live data.
 
 **Dialogue.** Every note lands in a chat thread anchored to the current
 problem, and you can type back — ask about the question, push back on a
@@ -224,11 +232,14 @@ in the same call, ordered after the text you're waiting on. Three
 changes did it: images go to the `claude` CLI inline (no file-read round
 trip), extended thinking is off — replaced by a one-line visible "tally"
 (atom counts, unit chains, sig figs recomputed digit by digit) that the
-feedback must agree with — and frames are downscaled to 960 px for
-reading while originals stay on disk. Automatic snaps still never come
-faster than one per 5 s, and a check that has produced nothing for 20
-seconds is killed and retried once — one slow outlier never becomes a
-39-second wait.
+feedback must agree with — and frames are downscaled to 1280 px for
+reading (wider is pointless: the API resamples anything past ~1.15 MP,
+and 1280 fixed a live row-binding misread that 960 produced) while
+originals stay on disk. Automatic snaps still never come faster than one
+per 5 s, they wait for your hand to clear the page (never more than
+15 s — a resting hand doesn't block checks), and a check that has
+produced nothing for 20 seconds is killed and retried once — one slow
+outlier never becomes a 39-second wait.
 
 And the cone: the little 3D cone in the header (Cono, cone) spins while
 a check or chat reply is being read and rests when the desk is quiet —
@@ -339,7 +350,7 @@ The page downsizes each video frame to 160×120 and measures how much
 changed since the last look, four times a second. Change above 20% means
 you're writing; once it drops below 10% the page has settled, and the
 frame — contrast-normalized unless you turned that off — goes to Claude
-inline (base64, downscaled to 960 px) through
+inline (base64, downscaled to 1280 px) through
 `claude -p --input-format stream-json --output-format stream-json
 --include-partial-messages`. The reply streams back in fixed field
 order — visibility, what you're working on, the problem card, a faithful
