@@ -54,11 +54,26 @@ STUDY vs DEV. The page opens in study mode: just the twin — problem card,
 relations, page, map, dialogue, cone — with automatic defaults. The quiet
 "dev" switch (or --dev) reveals the instrumentation together: stage
 trace, writing-clarity cycler, per-check latency and clarity tags, the
-bundle path. Modes change only what is SHOWN; recording and per-check
-metadata never stop. An always-reachable "Suggest an improvement" box
-(both modes) appends each suggestion, timestamped with its context
-(problem, last check, frame, mode/config), to the session bundle and to
-~/deskcap/suggestions.jsonl, which accumulates across sessions.
+bundle path, and rating pills (helped / didn't help / wrong) on every
+note and reply, saved the moment they're clicked. Modes change only what
+is SHOWN; recording and per-check metadata never stop. An always-
+reachable "Suggest an improvement" box (both modes) appends each
+suggestion, timestamped with its context (problem, last check, frame,
+mode/config, run dir), to the run log, the session bundle when
+recording, and ~/deskcap/suggestions.jsonl, which accumulates across
+sessions.
+
+RUN LOG - never stops. Every run (any mode, recording or not) writes
+~/deskcap/check-<timestamp>/run.jsonl beside its frames: every check
+with its raw reply, every chat and reply, rating, suggestion, pause and
+button press. 2026-10-29 lost 80 minutes of checks and chat to an early
+"End & rate"; the run log is the floor under the session bundle.
+
+PAUSE CHECKING - camera and recording keep running, but no automatic
+snapshot is sent until Resume (Check now and typed questions still go
+out). NO PAGE IN VIEW - an automatic check whose frame holds no paper
+(paper_frac < NO_PAGE_AT, Pillow-if-present) is answered locally and
+never sent.
 
 TESTDEV MODE - every live run records. From launch until "End & rate"
 (or the server stops), each live run (deskview or browser) saves a full
@@ -66,8 +81,9 @@ session bundle locally: a dense photo of the page (every 3 s for the
 first 10 minutes, every 10 s after), every snapshot read, every note,
 chat, pen-point and button press - all in ~/deskcap/session-<timestamp>/.
 Ending shows the rating pass (Helped / Didn't help / Wrong per note -
-skippable); the bundle is complete and scoreable either way, and one
-click deletes it. The server prints the folder size every 10 minutes and
+pre-filled from in-place ratings, skippable); the bundle is complete and
+scoreable either way, and one click deletes it. After ending, the header
+reads "not recording" and a Start recording button begins a new bundle. The server prints the folder size every 10 minutes and
 at the end. Nothing leaves the machine beyond the snaps Claude already
 reads. Opt out with --no-record. (`session` is accepted as a no-op alias
 from the 10-minute era.) Demo/replay runs never record.
@@ -171,7 +187,7 @@ TALLY: one line of private working in shorthand that your check depends on - rec
 CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
 KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed.
 GRID: a readability map of the sheet of paper itself (ignore the desk around it): exactly 6 lines of 4 digits, each digit one cell of the page in reading order, top-left cell first. 2 = ink or print there and readable, 1 = something written or printed there but too blurry, small, cut off, or glared to read reliably, 0 = blank paper. If no page is in frame, give 6 lines of 0000.
-EQUATIONS: ALL the relations that govern the problem in PROBLEM, up to 4 - taken from the page if the student wrote them, otherwise the standard relations the problem needs. One complete relation per line, never truncated, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Never reveal a value or coefficient the student still has to find or fix - put ? in its place (their balancing wrong -> write ?O_2, never the corrected coefficient). Write "none" if none apply."""
+EQUATIONS: ALL the relations that govern the problem in PROBLEM, up to 4 - taken from the page if the student wrote them, otherwise the standard relations the problem needs. One complete relation per line, never truncated, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Never reveal a value or coefficient the student still has to find or fix - put ? in its place (their balancing wrong -> write ?O_2, never the corrected coefficient). Write "none" if none apply. If WORKING ON is "nothing new" and PROBLEM is the current problem from the context, write exactly "EQUATIONS: same" - the relations already shown are kept."""
 
 CONTEXT_BLOCK = """
 Context from your earlier looks. The known questions and the baseline reading below are your own established state: trust them for ink that has not changed, and read only new or changed ink fresh from the image.{questions}
@@ -182,6 +198,9 @@ Your recent notes to the student (do not repeat these):
 {last_checks}{advice}{thread}
 If the page has flipped to a different sheet, treat it as fresh context and name the new page in WORKING ON.
 """
+
+ANSWERED_NOTE = """
+In the conversation you have already given the student the full answer to this problem. Do not hint toward it again or ask guiding questions about it: only check whether what they write matches it - confirm when it does, and point once at a remaining difference when it does not."""
 
 ADVICE_BLOCK = """
 Advice you have ALREADY given on this problem (never give any of it again, even reworded; if the same issue still stands, move ONE rung up the ladder - a guiding question becomes one worked step - or say something genuinely new; if you can no longer verify the issue from the image at high confidence, drop it and build on what the student wrote):
@@ -253,9 +272,20 @@ Your recent margin notes (do not repeat them):
 Conversation so far on this problem:
 {thread}
 
-Ladder policy - never refuse help, never hand over the answer early. Counting this message, the student has explicitly asked for help on this problem {asks} time(s). If the message asks for the answer, the fix, or the next step on flagged work: on ask #1, give ONE worked step with a one-clause reason if your notes already asked a guiding question about it, otherwise ask ONE guiding question; on ask #2 or later, give the full remaining answer plainly, keeping their correct lines, and end with "want to explain it back to me on paper?". A direct question about what a problem means, a definition, or something readable off the page may be answered directly at any rung. At most 2 short sentences (the full answer may take the space it needs); chem/math shorthand over prose; no exclamation marks; use the worksheet's own printed labels; never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. When your answer hinges on a count or on arithmetic, redo the count digit by digit in shorthand as part of the reply ("O: L 4x2=8, R 3x2+4=10") instead of asserting a total from memory, and your stated conclusion must agree with the two numbers you just wrote - if they differ, say they differ. If the student tells you what their page or the printed sheet says and it differs from your reading, their reading wins unless you can point at the exact place in the image that shows otherwise - never tell them to re-read or double-check something they just read out to you.
+Ladder policy - never refuse help, never hand over the answer early. Counting this message, the student has explicitly asked for help on this problem {asks} time(s). If the message asks for the answer, the fix, or the next step on flagged work: on ask #1, give ONE worked step with a one-clause reason if your notes already asked a guiding question about it, otherwise ask ONE guiding question; on ask #2 or later, give the full remaining answer plainly, keeping their correct lines, and end with "want to explain it back to me on paper?". A direct question about what a problem means, a definition, a concept (how or why something works), or something readable off the page may be answered directly at any rung. Answer what was asked first: a yes/no or either/or question opens with the answer ("No - ...", "It doesn't, because ..."), a question about a value or term opens with it; never open with background or a restatement before the answer. At most 2 short sentences (the full answer may take the space it needs); chem/math shorthand over prose; no exclamation marks; use the worksheet's own printed labels; never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. When your answer hinges on a count or on arithmetic, redo the count digit by digit in shorthand as part of the reply ("O: L 4x2=8, R 3x2+4=10") instead of asserting a total from memory, and your stated conclusion must agree with the two numbers you just wrote - if they differ, say they differ. If the student tells you what their page or the printed sheet says and it differs from your reading, their reading wins unless you can point at the exact place in the image that shows otherwise - never tell them to re-read or double-check something they just read out to you.
 
-Student: {text}"""
+{intent_note}Student: {text}"""
+
+# page-level quick actions (suggestions 2026-10-29: "tell me if there are any
+# more trick questions", "read this worksheet and give me a review of the
+# background concepts"): one tap, a full-resolution copy of the page rides
+# along so the printed questions can be read, and the length limit lifts
+CHAT_INTENTS = {
+    "tricks": ("Any trick questions on this page?", """This is a page scan, and it overrides the length limit above. Read every printed question on the visible sheet (a full-resolution copy of the page is attached). Open with the answer - how many questions hide a trap, or "None that I can see". Then, one short line each, name every question with a trap by its printed label and say what KIND of trap it is - an exception to the usual trend, a reversed order ("least to most"), a units or sign trap, a subtle word - without giving its answer, the correct order, or the value. Separate items with line breaks, no markdown.
+"""),
+    "review": ("Review the background concepts for this sheet.", """This is a page review, and it overrides the length limit above. Read the printed questions on the visible sheet (a full-resolution copy of the page is attached) and review the background they rely on: 2 to 5 concepts in the order the sheet uses them, one or two plain lines each - the rule or definition, and its relation in plain notation if one applies, plus the usual exception if the sheet tests one. Do not solve or order any question on the sheet. Separate concepts with line breaks, no markdown, no headings.
+"""),
+}
 
 # pointing lives in the digital twin: the student clicks a transcribed line,
 # a relation, the problem card, or a readability-map cell, and the anchor
@@ -315,10 +345,21 @@ class State:
         self.cant_resolve = {}          # label -> consecutive checks that flagged an unreadable fact
         self.disputes = {}              # label -> True once the student disputed our reading
         self.misfires = 0               # "nothing new" claims suppressed against a changing page
+        # --- 2026-10-29 test round ---
+        self.ratings = {}               # message id -> {"verdict","wrong_kind","note"}: rated in place
+        self.checks_paused = False      # Pause checking: camera + recording run, nothing is sent
+        self.answered = {}              # label -> True once chat gave the full answer (no re-hinting)
+        self.no_page = 0                # automatic checks skipped locally: no paper in frame
 
     def thread(self):
+        """The current problem's thread, with page-level messages (asked before
+        any problem was identified) woven in by id - they used to vanish the
+        moment the first check named a problem (E2E 2026-10-29: a streamed
+        reply disappeared in 26 of 90 samples)."""
         label = (self.problem or {}).get("label")
-        return self.threads.setdefault(label, []) if label else []
+        own = self.threads.setdefault(label, []) if label else []
+        page = self.threads.get("page", []) if label != "page" else []
+        return sorted(own + page, key=lambda m: m.get("id") or 0) if page else own
 
     def snapshot(self):
         with self.lock:
@@ -333,6 +374,8 @@ class State:
                 "session_ms": SESSION.t() if SESSION.active else 0,
                 "session_path": str(SESSION.dir) if SESSION.active else None,
                 "record": self.record, "dev": self.dev, "view": self.view,
+                "checks_paused": self.checks_paused, "ratings": self.ratings,
+                "run_log": str(RUNLOG.path) if RUNLOG.path else None,
                 "twin": {
                     "problem": self.problem, "equations": self.equations,
                     "grid": self.grid, "grid_snap": self.grid_snap,
@@ -413,6 +456,33 @@ class Stages:
 STATE = State()
 
 
+class RunLog:
+    """run.jsonl beside the run's frames (~/deskcap/check-<timestamp>/): every
+    check (with its raw reply), chat, suggestion, rating and button press of
+    the whole run, in every mode — independent of the session recording.
+    Session 2026-10-29 lost 80 minutes of checks, chats and context because
+    "End & rate" was pressed 46 s in and nothing logged after it; the run log
+    is the floor that never stops (recording only adds the dense bundle)."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.path = None                # set in main() once the run dir exists
+
+    def write(self, type_, **kw):
+        if not self.path:
+            return
+        rec = {"ts": datetime.now().isoformat(timespec="milliseconds"), "type": type_,
+               "session": SESSION.dir.name if SESSION.active else None,
+               "session_t": SESSION.t() if SESSION.active else None, **kw}
+        try:
+            with self.lock, open(self.path, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+        except (OSError, TypeError, ValueError) as e:
+            print(f"run log write failed: {e}")
+
+
+RUNLOG = RunLog()
+
+
 class Session:
     """One recorded session bundle. TESTDEV MODE: recording is always on in
     live modes — it starts at launch and runs until "End & rate" or server
@@ -439,7 +509,9 @@ class Session:
     def t(self):
         return int((time.time() - self.started) * 1000)
 
-    def event(self, type_, **kw):
+    def event(self, type_, runlog=True, **kw):
+        if runlog:                      # the run log hears everything, recording or not
+            RUNLOG.write(type_, **kw)
         with self.lock:
             if not self.active:
                 return
@@ -518,11 +590,15 @@ class Session:
             self.active = False
         m = self.manifest(ended_by)
         (self.dir / "session.json").write_text(json.dumps(m, indent=1))
+        RUNLOG.write("session_end", dir=str(self.dir), ended_by=ended_by,
+                     checks=len(self.checks), duration_s=m["duration_s"])
         size = self.size_mb()
         print(f"session saved: {self.dir}  ({size:.0f} MB)")
         print(f"score it:      {HERE / 'tools' / 'score-session.py'} {self.dir}")
         return {"path": str(self.dir), "mb": round(size),
-                "checks": [{"snap": c["snap"], "check": c["check"]} for c in self.checks]}
+                "checks": [{"snap": c["snap"], "check": c["check"], "id": c.get("id"),
+                            "rating": c.get("annotation")} for c in self.checks
+                           if not c.get("skipped")]}
 
 
 SESSION = Session()
@@ -590,6 +666,8 @@ USER_REASONS = ("asked", "next", "retry")   # student pressed something: never e
 
 
 def queue_check(snap_name, reason):
+    if STATE.checks_paused and reason not in USER_REASONS:
+        return                          # Pause checking: only an explicit ask goes out
     with PENDING_LOCK:
         if PENDING and PENDING[0][1] in USER_REASONS and reason not in USER_REASONS:
             return                      # an automatic snap never evicts a user request
@@ -647,7 +725,9 @@ def parse_report(text, partial=False):
             elif field == "GRID":
                 pass                    # rows follow on their own lines
             elif field == "EQUATIONS":
-                if rest.strip() and rest.strip().lower() != "none":
+                if rest.strip().lower().strip(".") == "same":
+                    out["equations_same"] = True    # keep the shown relations (token saver)
+                elif rest.strip() and rest.strip().lower() != "none":
                     eq, _, name = rest.partition("::")
                     if eq.strip():
                         out["equations"].append({"eq": eq.strip(), "name": name.strip()})
@@ -662,7 +742,8 @@ def parse_report(text, partial=False):
             if re.fullmatch(r"[012]{2,8}", row) and len(out["grid"]) < 8:
                 out["grid"].append(row)
         elif field == "EQUATIONS":
-            if line.strip() and line.strip().lower() != "none" and len(out["equations"]) < 6:
+            if line.strip() and line.strip().lower().strip(".") not in ("none", "same") \
+                    and len(out["equations"]) < 6:
                 eq, _, name = line.partition("::")
                 if eq.strip():
                     out["equations"].append({"eq": eq.strip(), "name": name.strip()})
@@ -807,7 +888,8 @@ def hand_in_frame(path):
         return False
     try:
         im = _PILImage.open(path).convert("RGB").resize((160, 120))
-        px = list(im.getdata())
+        b = im.tobytes()                    # getdata() is deprecated in Pillow 12
+        px = list(zip(b[0::3], b[1::3], b[2::3]))
         skin = sum(1 for r, g, b in px
                    if r > 95 and g > 40 and b > 20 and r > g + 15 and r > b + 15)
         frac = skin / len(px)
@@ -819,6 +901,29 @@ def hand_in_frame(path):
     else:
         HAND["floor"] = min(floor + 0.0005, frac)
     return frac > HAND["floor"] + 0.03
+
+
+NO_PAGE_AT = 0.12       # paper fraction below this = no page in frame (skip the call)
+
+
+def paper_frac(path):
+    """Fraction of a thumbnail that looks like paper: bright and nearly
+    colorless. Measured 2026-10-29 against the model's own VISIBILITY on 190
+    live checks: every frame under 0.15 was one the model scored 0-2/10 (a
+    lap, a shirt, a sleeve on the lens), and 403 frames of real pages across
+    the five labeled core sessions never scored below 0.339 — so NO_PAGE_AT
+    0.12 sits far from any readable page while catching ~25% of a run's
+    calls (tools/eval-no-page.py re-runs the measurement). Pillow-if-present;
+    without it, returns None and nothing is ever skipped."""
+    if not PIL_OK:
+        return None
+    try:
+        im = _PILImage.open(path).convert("RGB").resize((160, 120))
+        b = im.tobytes()                    # getdata() is deprecated in Pillow 12
+        px = list(zip(b[0::3], b[1::3], b[2::3]))
+        return sum(1 for r, g, b in px if min(r, g, b) > 120 and max(r, g, b) - min(r, g, b) < 45) / len(px)
+    except Exception:
+        return None
 
 
 def shrink_for_model(path, width=1280):
@@ -862,6 +967,10 @@ def anchor_region(x, y):
     col = ["left", "middle", "right"][min(int(x * 3), 2)]
     row = ["top", "center", "bottom"][min(int(y * 3), 2)]
     return f"{row} {col}" if (row, col) != ("center", "middle") else "center"
+
+
+class _Skip(Exception):
+    """A check answered locally (no page in view): no model call is made."""
 
 
 class FirstTokenTimeout(RuntimeError):
@@ -1062,7 +1171,7 @@ def build_context():
         pin_note=PIN_NOTE.format(pin=STATE.pinned_label) if STATE.pinned_label else "",
         last_on_page=STATE.last_on_page[:1200] or "(none yet)",
         last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
-        advice=ablock,
+        advice=ablock + (ANSWERED_NOTE if STATE.answered.get(label) else ""),
         thread=tblock,
     )
 
@@ -1076,6 +1185,7 @@ def absorb_twin(entry, snap, next_from=None):
     if entry.get("kind") == "setup":
         return                          # unreadable frame: keep card + equations
     p = entry.get("problem")
+    prev_label = (STATE.problem or {}).get("label")
     accepted = True                     # does this check's PROBLEM stand?
     if p and p.get("label"):
         label = p["label"]
@@ -1106,6 +1216,8 @@ def absorb_twin(entry, snap, next_from=None):
     # leave the pinned card wearing the old problem's relations
     if accepted and entry.get("equations"):
         STATE.equations = entry["equations"]
+    elif accepted and entry.get("equations_same") and p and p.get("label") != prev_label:
+        STATE.equations = []            # "same" on a different problem: never show stale relations
     if entry.get("on_page"):
         # sticky transcription: a re-read of an unchanged line never re-rolls
         # its surface form - if the new reading matches the previous one up
@@ -1186,7 +1298,20 @@ def checker(frames_dir):
                 EVENTS.emit(type="check_partial", id=cid, check=p["check"],
                             problem=p["problem"], visibility=p["visibility"],
                             working_on=p["working_on"])
+        # no page in frame (a lap, a shirt, a sleeve on the lens): an automatic
+        # check is answered locally - 62 of 147 checks in run 2026-10-29 went to
+        # opus to be told "lay the sheet flat". A student's own ask still goes out.
+        frac = paper_frac(frames_dir / snap) if reason not in USER_REASONS else None
+        if frac is not None and frac < NO_PAGE_AT:
+            entry.update(visibility=None, visibility_note="no page in view", on_page="",
+                         kind="setup", skipped="no-page", paper=round(frac, 3),
+                         check="No page in view - lay your sheet flat under the camera.")
+            with STATE.lock:
+                STATE.no_page += 1
+            st.hit("skipped")
         try:
+            if entry.get("skipped"):
+                raise _Skip
             with STATE.lock:
                 cmode, mode = STATE.contrast, STATE.mode
                 client_enh = STATE.snap_enh.get(snap)
@@ -1236,6 +1361,8 @@ def checker(frames_dir):
                         STATE.threads.setdefault(label, []).append(
                             {"who": "cono", "text": entry["check"], "time": entry["time"],
                              "kind": entry["kind"], "snap": snap, "id": cid})
+        except _Skip:
+            print(f"check {snap} ({reason}): no page in view (paper {entry['paper']}) - not sent")
         except Exception as e:
             entry.update(visibility=None, visibility_note="", on_page="", failed=True,
                          check="Couldn't read this snapshot. Check that `claude` runs "
@@ -1248,35 +1375,41 @@ def checker(frames_dir):
         first_ms = int(first * 1000) if first else None
         print(f"check {snap} ({reason}): first text "
               f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")
-        if in_session and SESSION.active:
+        recording = in_session and SESSION.active
+        if recording:
             try:
                 shutil.copy(frames_dir / snap, SESSION.dir / "snaps" / snap)
             except OSError:
                 pass
-            # the config dict is what score/correlation tooling keys on: it must
-            # carry EVERYTHING that varied or could vary per check - style,
-            # width, model, thinking, and the clarity pass actually applied
-            # (report 14 found zero contrast data because the tag lived only
-            # beside the config, where the analysis never looked)
-            record = {"t": t, "snap": snap, "reason": reason,
-                      "config": {**cfg, "model": STATE.model,
-                                 "thinking": "off",   # claude_stream pins MAX_THINKING_TOKENS=0
-                                 "contrast": entry.get("contrast", "off")},
-                      "style": cfg["style"], "latency_ms": latency,
-                      "first_token_ms": first_ms,
-                      "contrast": entry.get("contrast", "off"),
-                      "stages": entry.get("stages", []),
-                      "problem": (entry.get("problem") or {}).get("label", ""),
-                      "visibility": entry.get("visibility"),
-                      "suppressed": entry.get("suppressed"),
-                      "repeat_n": entry.get("repeat_n"),
-                      "zoom": entry.get("zoom"),
-                      "retried": entry.get("retried", False),
-                      "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
-                      "raw": raw, "annotation": None}
+        # the config dict is what score/correlation tooling keys on: it must
+        # carry EVERYTHING that varied or could vary per check - style,
+        # width, model, thinking, and the clarity pass actually applied
+        # (report 14 found zero contrast data because the tag lived only
+        # beside the config, where the analysis never looked)
+        record = {"t": t, "id": cid, "snap": snap, "reason": reason,
+                  "config": {**cfg, "model": STATE.model,
+                             "thinking": "off",   # claude_stream pins MAX_THINKING_TOKENS=0
+                             "contrast": entry.get("contrast", "off")},
+                  "style": cfg["style"], "latency_ms": latency,
+                  "first_token_ms": first_ms,
+                  "contrast": entry.get("contrast", "off"),
+                  "stages": entry.get("stages", []),
+                  "problem": (entry.get("problem") or {}).get("label", ""),
+                  "visibility": entry.get("visibility"),
+                  "suppressed": entry.get("suppressed"),
+                  "repeat_n": entry.get("repeat_n"),
+                  "zoom": entry.get("zoom"),
+                  "skipped": entry.get("skipped"),
+                  "kind": entry.get("kind", ""),
+                  "retried": entry.get("retried", False),
+                  "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
+                  "raw": raw, "annotation": None}
+        RUNLOG.write("check", **{k: v for k, v in record.items() if k != "t"})
+        if recording:
             with SESSION.lock:
                 SESSION.checks.append(record)
-            SESSION.event("check_done", snap=snap, reason=reason, config=cfg,
+            SESSION.event("check_done", runlog=False,   # the run log has the full record
+                          snap=snap, reason=reason, config=cfg,
                           latency_ms=latency, first_token_ms=first_ms,
                           visibility=entry.get("visibility"))
         with STATE.lock:
@@ -1287,7 +1420,7 @@ def checker(frames_dir):
         EVENTS.emit(type="check_done", id=cid, snap=snap)
 
 
-def run_chat(cid, text, anchor, frames_dir):
+def run_chat(cid, text, anchor, frames_dir, intent=None):
     """One typed (or pen-pointed) student message → one streamed reply."""
     now = datetime.now().strftime("%H:%M")
     tag = anchor and (anchor_region(anchor["x"], anchor["y"]) if anchor["kind"] == "region"
@@ -1338,7 +1471,7 @@ def run_chat(cid, text, anchor, frames_dir):
                          if crop else "")
                 if crop:
                     blocks.append(img_block(crop))
-            elif dispute:               # disputed reading: re-read at full resolution
+            elif dispute or intent:     # disputed reading / page scan: full resolution
                 blocks.append(img_block(frames_dir / img))
                 st.hit("zoom")
         if dispute:
@@ -1347,7 +1480,8 @@ def run_chat(cid, text, anchor, frames_dir):
             print(f"dispute ({label}): full-res re-read armed")
         prompt = CHAT_PROMPT.format(anchor_note=anchor_note, problem=problem,
                                     last_on_page=on_page, last_checks=notes,
-                                    thread=thread, asks=asks, text=text)
+                                    thread=thread, asks=asks, text=text,
+                                    intent_note=CHAT_INTENTS[intent][1] if intent else "")
         st.hit("sent")
         try:                            # outlier guard: silent 20 s → one retry
             raw, first = claude_stream([{"type": "text", "text": prompt}] + blocks,
@@ -1369,7 +1503,12 @@ def run_chat(cid, text, anchor, frames_dir):
             {"who": "cono", "text": reply, "time": datetime.now().strftime("%H:%M"),
              "kind": "chat", "snap": img, "id": cid})
         STATE.last_checks = (STATE.last_checks + [reply])[-3:]
-    SESSION.event("chat_done", text=text, anchor=anchor, reply=reply,
+        # the ladder's top rung ends with the explain-back offer: from here
+        # on, checks verify against the given answer instead of re-hinting
+        # (2026-10-29: a check re-hinted 114a 20 s after chat gave the answer)
+        if label != "page" and "explain it back" in reply.lower():
+            STATE.answered[label] = True
+    SESSION.event("chat_done", id=cid, problem=label, intent=intent, text=text, anchor=anchor, reply=reply,
                   asks=asks, latency_ms=latency, first_token_ms=first_ms,
                   stages=st.list)
     EVENTS.emit(type="chat_done", id=cid)
@@ -1591,6 +1730,9 @@ class Handler(BaseHTTPRequestHandler):
                     anchor = None
             else:
                 anchor = None
+            intent = data.get("intent") if data.get("intent") in CHAT_INTENTS else None
+            if intent and not text:
+                text = CHAT_INTENTS[intent][0]
             if not text:
                 text = "What about this?" if anchor else ""
             if not text:
@@ -1598,8 +1740,8 @@ class Handler(BaseHTTPRequestHandler):
             with STATE.lock:
                 STATE.msg_id += 1
                 cid = STATE.msg_id
-            SESSION.event("chat_sent", text=text, anchor=anchor)
-            threading.Thread(target=run_chat, args=(cid, text, anchor, self.frames_dir),
+            SESSION.event("chat_sent", id=cid, text=text, anchor=anchor, intent=intent)
+            threading.Thread(target=run_chat, args=(cid, text, anchor, self.frames_dir, intent),
                              daemon=True).start()
             self.send(200, json.dumps({"id": cid}).encode(), "application/json")
         elif url.path == "/contrast":                # writing clarity: off/auto/strong
@@ -1638,16 +1780,57 @@ class Handler(BaseHTTPRequestHandler):
                        "snap": last.get("snap"), "frame": STATE.latest_img or STATE.frame,
                        "mode": STATE.mode, "model": STATE.model,
                        "contrast": STATE.contrast, "dev": STATE.dev}
+            # "run" always links the suggestion to its frames + run log, even
+            # when no session is recording (2026-10-29: 8 suggestions saved
+            # with session null and no way back to the run they described)
             rec = {"ts": datetime.now().isoformat(timespec="seconds"), "text": text,
                    "session": str(SESSION.dir) if SESSION.active else None,
-                   "t_ms": SESSION.t() if SESSION.active else None, **ctx}
+                   "t_ms": SESSION.t() if SESSION.active else None,
+                   "run": str(self.frames_dir), **ctx}
             jl = Path.home() / "deskcap" / "suggestions.jsonl"   # survives any one bundle
             jl.parent.mkdir(parents=True, exist_ok=True)
             with open(jl, "a") as f:
                 f.write(json.dumps(rec) + "\n")
             SESSION.event("suggestion", **{k: v for k, v in rec.items() if k != "session"})
             print(f"suggestion: {text[:80]}")
-            self.send(200, b"{}", "application/json")
+            saved = [str(jl), str(RUNLOG.path)] + ([str(SESSION.dir)] if SESSION.active else [])
+            self.send(200, json.dumps({"saved": saved}).encode(), "application/json")
+        elif url.path == "/rate":                    # in-place rating of one note (no need to end)
+            data = json.loads(self.body() or b"{}")
+            verdict = data.get("verdict")
+            if verdict not in ("helped", "didnt", "wrong", ""):
+                return self.send(400, b"verdict must be helped, didnt or wrong", "text/plain")
+            try:
+                mid = int(data.get("id"))
+            except (TypeError, ValueError):
+                return self.send(400, b"id required", "text/plain")
+            wk = data.get("wrong_kind") if verdict == "wrong" else ""
+            wk = wk if wk in ("misread", "advice") else ""
+            rating = {"verdict": verdict, "wrong_kind": wk,
+                      "note": str(data.get("note") or "")[:500]}
+            with STATE.lock:
+                STATE.ratings[mid] = rating
+                msg = next((m for t in STATE.threads.values() for m in t
+                            if m.get("id") == mid and m["who"] == "cono"), None)
+                said = msg["text"] if msg else ""
+                kind = msg.get("kind") if msg else ""
+            with SESSION.lock:          # the manifest's own annotation, ready for End & rate
+                for c in SESSION.checks:
+                    if c.get("id") == mid:
+                        c["annotation"] = rating
+            SESSION.event("rating", id=mid, kind=kind, said=said[:300], **rating)
+            self.send(200, json.dumps({"id": mid, **rating}).encode(), "application/json")
+        elif url.path == "/pause":                   # pause/resume checking: camera stays on
+            data = json.loads(self.body() or b"{}")
+            with STATE.lock:
+                STATE.checks_paused = bool(data.get("on"))
+                on = STATE.checks_paused
+            if on:
+                with PENDING_LOCK:      # a queued automatic snap must not slip out after Pause
+                    PENDING[:] = [x for x in PENDING if x[1] in USER_REASONS]
+            SESSION.event("checks_paused" if on else "checks_resumed")
+            print("checking " + ("paused — nothing is sent" if on else "resumed"))
+            self.send(200, json.dumps({"on": on}).encode(), "application/json")
         elif url.path == "/next":                    # problem card: Next button
             with STATE.lock:
                 label = (STATE.problem or {}).get("label") or "the current problem"
@@ -1659,6 +1842,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, json.dumps({"from": label}).encode(), "application/json")
         elif url.path == "/session/start":
             meta = json.loads(self.body() or b"{}")
+            if not SESSION.active and STATE.mode not in ("live", "deskview"):
+                return self.send(400, b"demo/replay runs never record", "text/plain")
             path = SESSION.start(meta)   # active session: merges meta; else resumes recording
             self.send(200, json.dumps({"path": path}).encode(), "application/json")
         elif url.path == "/session/frame" and SESSION.active:
@@ -1676,9 +1861,9 @@ class Handler(BaseHTTPRequestHandler):
                 with open(SESSION.dir / "signal.csv", "a") as f:
                     f.writelines(f"{int(t)},{cf:.4f}\n" for t, cf in pairs)
             self.send(200, b"{}", "application/json")
-        elif url.path == "/session/event" and SESSION.active:
+        elif url.path == "/session/event":          # UI events: run log always, bundle if recording
             ev = json.loads(self.body() or b"{}")
-            if ev.get("type") == "pause":
+            if ev.get("type") == "pause" and SESSION.active:
                 with SESSION.lock:
                     SESSION.pauses += 1
             SESSION.event(ev.pop("type", "event"), **ev)
@@ -1967,6 +2152,9 @@ def main():
         threading.Thread(target=checker, args=(out,), daemon=True).start()
 
     Handler.frames_dir = out
+    RUNLOG.path = out / "run.jsonl"
+    RUNLOG.write("run_start", mode=STATE.mode, model=model, record=STATE.record,
+                 contrast=STATE.contrast, dev=STATE.dev)
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
     def stop(*_):

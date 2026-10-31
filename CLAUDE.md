@@ -61,6 +61,18 @@
 - Checks remember the page via STATE.last_on_page/last_checks; stuck
   nudges fire after STUCK_S (env CONO_STUCK_S for tests) of quiet.
 - `cono doctor` is the preflight; keep it passing after changes.
+  `tools/selftest.py` (offline, no `claude` calls) must pass too.
+- Nothing the student does may go unlogged: RUNLOG (check-*/run.jsonl)
+  receives every check record, chat, rating, suggestion and UI event in
+  every mode, independent of SESSION. `SESSION.event()` writes both;
+  add new events through it. In-place ratings go through /rate and land
+  in the run log, STATE.ratings, and the session manifest's annotation.
+- Live streams render per id (`live` Map in index.html): never go back
+  to a single shared slot — two checkers + chat stream concurrently.
+- The no-page gate (NO_PAGE_AT, paper_frac) only skips automatic checks
+  and was set from data; re-measure with `tools/eval-no-page.py` before
+  touching it. Skipping on "unchanged page" pixel diffs was measured and
+  rejected (new ink is a ~3% diff; a moved page is larger).
 - The executable is `cono` (renamed from `cono-check`, 2026-10-27).
   `cono-check` is a committed deprecation shim that execs `cono` —
   keep it working until collaborators' rigs have migrated. Machine-compat

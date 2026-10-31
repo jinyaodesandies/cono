@@ -232,6 +232,7 @@
   .dialogue { display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
   .dialogue .empty { color: var(--faded); max-width: 48ch; font-size: 14px; padding: 6px 0; }
   .msg { max-width: 56ch; font-size: 16px; line-height: 1.5; }
+  .msg .mtext { white-space: pre-line; }   /* page scans and reviews come one item per line */
   .msg .mtime { color: var(--faded); font-size: 12px; margin-left: 8px; }
   .msg.cono { border-left: 2px solid var(--line); padding-left: 14px; }
   .msg.cono.confirm { border-left-color: var(--leaf); }
@@ -254,6 +255,25 @@
   }
   .morebtn:hover { color: var(--lamp); }
   .quietline { color: var(--faded); font-size: 13.5px; padding: 2px 0; }
+  .quietline.live::after { content: "▍"; color: var(--faded); animation: breathe 1s infinite; }
+  /* dev mode: rate a note where it stands — no need to end the session */
+  .rate { display: inline-flex; gap: 6px; margin-left: 10px; vertical-align: middle; }
+  body:not(.dev) .rate { display: none; }
+  .rate button {
+    background: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+    color: var(--faded); font-size: 11.5px; padding: 1px 8px;
+  }
+  .rate button:hover { color: var(--paper); }
+  .rate button.on { border-color: var(--lamp); color: var(--lamp); }
+  .rate button.on[data-v=wrong], .rate button.on[data-w] { border-color: var(--clay); color: var(--clay); }
+  /* one-tap asks: the pointed thing, and the whole page */
+  .quickrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: -4px; }
+  .chipbtn {
+    background: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+    color: var(--ink); font-size: 12.5px; padding: 3px 11px; white-space: nowrap;
+  }
+  .chipbtn:hover { border-color: var(--lamp); color: var(--lamp); }
+  .chipbtn:disabled { color: var(--faded); border-color: var(--line); cursor: default; }
   .pendingline { display: flex; gap: 10px; align-items: center; color: var(--faded); font-size: 13.5px; }
   .pendingline img { height: 34px; border-radius: 3px; }
 
@@ -430,6 +450,7 @@
   #suggestlog { color: var(--faded); font-size: 12.5px; }
   #suggestlog div { padding: 2px 0; }
   #suggestlog .ok { color: var(--leaf); }
+  #suggestlog .savedto { font-size: 11.5px; word-break: break-all; }
   .hist { border-top: 1px solid var(--line); padding: 10px 0; }
   .hist .meta { display: flex; align-items: center; gap: 10px; color: var(--faded); font-size: 12.5px; margin-bottom: 4px; }
   .hist .meta img { height: 32px; border-radius: 3px; display: block; }
@@ -466,6 +487,8 @@
   /* 10-minute recorded session */
   header .rec { color: var(--lamp); font-size: 14px; }
   header .rec::before { content: "● "; }
+  header .rec.off { color: var(--faded); }
+  header .rec.off::before { content: "○ "; }
   .panel {
     background: var(--surface);
     border: 1px solid var(--line);
@@ -546,9 +569,16 @@
     <div class="quietline" id="quietline" hidden></div>
     <form class="askrow" id="askform">
       <button class="anchortag" id="anchortag" type="button" hidden title="Clear the pointed spot"></button>
+      <button class="chipbtn" id="anchoract" type="button" hidden></button>
       <input id="chatbox" autocomplete="off" placeholder="Ask — or click a line or relation above to point at it">
       <button class="pill" id="sendbtn" type="submit">Ask</button>
     </form>
+    <div class="quickrow" id="quickrow">
+      <button class="chipbtn" type="button" data-intent="tricks"
+        title="Reads every printed question and flags the ones with a trap — no answers">Trick questions?</button>
+      <button class="chipbtn" type="button" data-intent="review"
+        title="A short review of the background concepts this sheet relies on">Review concepts</button>
+    </div>
   </section>
 
   <!-- the real paper: framing view + what the model could read -->
@@ -565,13 +595,16 @@
       <div class="framingline" id="framingline" hidden>Fix the framing before you start working — see the note in the dialogue.</div>
       <div class="controls">
         <button class="pill" id="checknow" type="button" disabled>Check now</button>
-        <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
+        <button class="quiet" id="pausebtn" type="button" hidden
+          title="Camera stays on; nothing is sent until you resume (Check now and questions still work)">Pause checking</button>
         <button class="quiet" id="reframebtn" type="button" hidden>Re-frame Desk View</button>
         <button class="quiet" id="contrastbtn" type="button" hidden
           title="Clarity pass on snapshots before reading — auto stretches contrast, strong lifts faint strokes">writing clarity: auto</button>
         <button class="quiet" id="stagebtn" type="button" hidden
           title="Test feature: live trace of which stage of the reading a check is in">stage trace: on</button>
         <button class="quiet" id="endbtn" type="button" hidden>End &amp; rate</button>
+        <button class="quiet" id="recbtn" type="button" hidden
+          title="Record this run into a new session bundle in ~/deskcap">Start recording</button>
         <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
         <button class="quiet" id="devbtn" type="button" hidden
           title="Show the test instrumentation (stage trace, clarity control, latency tags)">dev</button>
@@ -659,9 +692,13 @@
   let replayTop = null, replayUnder = null;
   let lastState = null;       // latest /state payload
   let anchor = null;          // {x, y} pen-point, 0-1 fractions of the page image
-  let liveCheck = null;       // {id, check, problem} streaming check via SSE
-  let liveChat = null;        // {id, text} streaming chat reply via SSE
+  // every in-flight stream keeps its own slot, keyed by id, in start order:
+  // two checkers and a chat reply can stream at once, and a single shared
+  // slot made one stream's words vanish under another's (suggestion,
+  // 2026-10-29: "some words would disappear as the explanation builds")
+  const live = new Map();     // id -> {kind: "check"|"chat", text, quiet}
   let chatWaiting = false;
+  let checksPaused = false;   // Pause checking: camera on, nothing sent (server-confirmed)
   let contrastMode = "auto";  // writing clarity on snaps: off|auto|strong (server holds the truth)
   let devMode = false;        // study mode (default) hides instrumentation; logging never stops
   let stageTrace = localStorage.getItem("cono-stagetrace") !== "off";
@@ -673,20 +710,21 @@
     writing:  ["you’re writing", " — will check when you pause"],
     checking: ["reading your page", "…"],
     paused:   ["paused", " — camera is off"],
+    held:     ["checking paused", " — camera on, nothing is sent"],
     starting: ["starting", ""],
   };
   function setStatus() {
     const s = paused ? "paused" : serverStatus === "checking" ? "checking"
-            : writing ? "writing" : mode ? "watching" : "starting";
+            : checksPaused ? "held" : writing ? "writing" : mode ? "watching" : "starting";
     const [word, rest] = statusText[s];
     el("statusword").textContent = word;
-    el("statusword").className = (s === "watching" || s === "paused" || s === "starting") ? "calm" : "";
+    el("statusword").className = (s === "watching" || s === "paused" || s === "held" || s === "starting") ? "calm" : "";
     el("statusrest").textContent = rest;
-    el("lamp").className = "lampdot " + s;
+    el("lamp").className = "lampdot " + (s === "held" ? "paused" : s);
     el("checknow").disabled = paused || !mode || (manualPending && serverStatus === "checking");
     // the cone spins while anything is being read (check or chat reply)
     document.body.classList.toggle("busy",
-      serverStatus === "checking" || chatWaiting || !!liveChat || !!(stageRun && !stageRun.done));
+      serverStatus === "checking" || chatWaiting || live.size > 0 || !!(stageRun && !stageRun.done));
   }
 
   // ---------- camera (live mode) ----------
@@ -747,19 +785,8 @@
 
   function stopTracks() { stream?.getTracks().forEach(t => t.stop()); stream = null; }
 
-  // Desk View: pausing stops the capture tool; Continue (or Reconnect, while
-  // the camera is away) launches a fresh one, which also re-discovers the iPhone.
-  async function pauseDeskView() {
-    const r = await fetch("/camera/pause", { method: "POST" });
-    if (!r.ok) { paused = false; return; }
-    document.body.classList.add("paused");
-    el("pausebtn").textContent = "Continue";
-    el("pausebtn").className = "pill resume";
-    showOffline(["Paused — the Desk View camera is off.",
-      "Nothing is watched or sent. Hit Continue to pick up where you left off."], resumeDeskView, "Continue");
-    el("caption").textContent = "";
-    setStatus();
-  }
+  // Desk View: Reconnect (while the camera is away) launches a fresh capture
+  // tool, which also re-discovers the iPhone.
   async function resumeDeskView() {
     const r = await fetch("/camera/retry", { method: "POST" });
     if (!r.ok) return;
@@ -767,8 +794,6 @@
     poll.capErrShown = false;
     camWaiting = false;
     document.body.classList.remove("paused");
-    el("pausebtn").textContent = "Pause camera";
-    el("pausebtn").className = "quiet";
     showOffline(["Connecting to the Desk View camera…", "Lock your iPhone and set it on the lid, rear cameras facing you. " +
       "Black picture? See the iPhone tips under the camera view."]);
     camRefresh = true;          // next /state decides: live picture, or still waiting
@@ -791,29 +816,24 @@
     el("caption").textContent = "";
   });
 
-  let camBusy = false;          // one pause/continue request at a time (a double-click must not undo itself)
-  el("pausebtn").addEventListener("click", () => {
+  // Pause checking (suggestion 2026-10-29: "a start and pause sending
+  // button, worded better"): the camera and the recording keep running, but
+  // no automatic snapshot is sent until Resume. Check now and typed questions
+  // are explicit, so they still go out. Same control in every mode.
+  let camBusy = false;          // one request at a time (a double-click must not undo itself)
+  el("pausebtn").addEventListener("click", async () => {
     if (camBusy) return;
-    paused = !paused;
-    if (session) { session.paused = paused; sessionEvent(paused ? "pause" : "resume"); }
-    if (mode === "deskview") {
-      camBusy = true;
-      (paused ? pauseDeskView() : resumeDeskView()).finally(() => { camBusy = false; });
-      return;
-    }
-    if (paused) {
-      stopTracks();
-      document.body.classList.add("paused");
-      el("pausebtn").textContent = "Resume camera";
-      el("pausebtn").className = "pill resume";
-      showOffline(["Camera is off.", "Nothing is watched or sent."], false);
-      el("caption").textContent = "";
-      writing = false;
-      setStatus();
-    } else {
-      startCamera().then(setStatus);
-    }
+    camBusy = true;
+    const r = await fetch("/pause", { method: "POST", body: JSON.stringify({ on: !checksPaused }) }).catch(() => null);
+    camBusy = false;
+    if (r?.ok) renderPause((await r.json()).on);
   });
+  function renderPause(on) {
+    checksPaused = !!on;
+    el("pausebtn").textContent = checksPaused ? "Resume checking" : "Pause checking";
+    el("pausebtn").className = checksPaused ? "pill small resume" : "quiet";
+    setStatus();
+  }
 
   // ---------- gating + snaps (live mode) ----------
   const gateCanvas = document.createElement("canvas");
@@ -1027,6 +1047,7 @@
   }
 
   async function snap(reason, storeOnly) {
+    if (checksPaused && !storeOnly && reason !== "asked" && reason !== "next") return null;
     const v = el("video");
     if (!v.videoWidth) return null;
     const c = document.createElement("canvas");
@@ -1271,9 +1292,33 @@
     const thumb = m.snap && m.kind !== "chat"
       ? `<a href="/snap/${esc(m.snap)}" target="_blank" rel="noopener"><img class="mthumb" loading="lazy" decoding="async" src="/snap/${esc(m.snap)}" alt="snapshot read"></a>` : "";
     return `<div class="msg cono ${esc(m.kind || "")}">
-      <span class="mtext">${chemHTML(m.text)}</span><span class="mtime">${esc(m.time || "")}</span>${thumb}
+      <span class="mtext">${chemHTML(m.text)}</span><span class="mtime">${esc(m.time || "")}</span>${thumb}${rateHTML(m)}
       ${isLast ? `<div><button type="button" class="morebtn" id="explainmore">explain more</button></div>` : ""}
     </div>`;
+  }
+
+  // dev mode: every note and reply carries its own rating, saved the moment
+  // it's clicked (run log always, session bundle when recording). Both of
+  // 2026-10-29's runs lost their ratings: End & rate was the only way in,
+  // and pressing it ended the recording 46 s and 7 min into the runs.
+  function rateHTML(m) {
+    if (m.id == null) return "";
+    const r = (lastState?.ratings || {})[m.id] || {};
+    const b = (v, label) => `<button type="button" data-rate="${m.id}" data-v="${v}" class="${r.verdict === v ? "on" : ""}">${label}</button>`;
+    const w = (k, label) => `<button type="button" data-rate="${m.id}" data-v="wrong" data-w="${k}" class="${r.wrong_kind === k ? "on" : ""}">${label}</button>`;
+    return `<span class="rate">${b("helped", "helped")}${b("didnt", "didn’t help")}${b("wrong", "wrong")}` +
+           (r.verdict === "wrong" ? w("misread", "misread page") + w("advice", "advice wrong") : "") + `</span>`;
+  }
+
+  async function rate(id, verdict, wrongKind) {
+    const cur = (lastState?.ratings || {})[id] || {};
+    if (!wrongKind && cur.verdict === verdict) verdict = "";   // click again to clear
+    const r = await fetch("/rate", { method: "POST",
+      body: JSON.stringify({ id, verdict, wrong_kind: wrongKind || "" }) }).catch(() => null);
+    if (r?.ok && lastState) {
+      lastState.ratings = { ...(lastState.ratings || {}), [id]: await r.json() };
+      renderDialogue();
+    }
   }
 
   function renderDialogue() {
@@ -1285,17 +1330,25 @@
     if (!pending.length) manualPending = false;
     let html = "";
     const lastCono = [...thread].reverse().find(m => m.who === "cono");
-    thread.forEach(m => { html += msgHTML(m, !liveCheck && !liveChat && !chatWaiting && m === lastCono); });
-    if (liveCheck && liveCheck.check)
-      html += `<div class="msg cono live"><span class="mtext">${chemHTML(liveCheck.check)}</span></div>`;
-    else if (liveCheck && !pending.length)
+    thread.forEach(m => { html += msgHTML(m, !live.size && !chatWaiting && m === lastCono); });
+    // each stream renders in its own slot, in the order it started; a check
+    // that is narrating "nothing new" or framing streams into the quiet line
+    // instead (it was never going to become a note, so it must not appear
+    // as one and then vanish)
+    let quietLive = null, checkReading = false;
+    for (const [, v] of live) {
+      if (v.kind === "check" && v.quiet) { if (v.text) quietLive = v.text; continue; }
+      if (v.text) html += `<div class="msg cono live"><span class="mtext">${chemHTML(v.text)}</span></div>`;
+      else if (v.kind === "check") checkReading = true;
+    }
+    const chatStreaming = [...live.values()].some(v => v.kind === "chat");
+    if (checkReading && !pending.length)
       html += `<div class="pendingline"><span class="lampdot checking"></span>reading your page…</div>`;
-    else if (liveChat)
-      html += `<div class="msg cono live"><span class="mtext">${chemHTML(liveChat.text)}</span></div>`;
-    else if (chatWaiting)
+    if (chatWaiting && !chatStreaming)
       html += `<div class="pendingline"><span class="lampdot checking"></span>reading…</div>`;
+    const anyCheck = [...live.values()].some(v => v.kind === "check");
     pending.forEach(p => {
-      if (liveCheck) return;            // streaming text already shows progress
+      if (anyCheck) return;             // streaming text already shows progress
       const sec = Math.round((Date.now() - p.at) / 1000);
       html += `<div class="pendingline"><img src="/snap/${esc(p.id)}" alt="">
         <span><span class="lampdot checking"></span>reading your page… ${sec}s</span></div>`;
@@ -1308,11 +1361,17 @@
       el("dialogue").innerHTML = html;
       const more = el("explainmore");
       if (more) more.addEventListener("click", explainMore);
+      el("dialogue").querySelectorAll("[data-rate]").forEach(b =>
+        b.addEventListener("click", () => rate(+b.dataset.rate, b.dataset.v, b.dataset.w)));
       el("dialogue").scrollTop = el("dialogue").scrollHeight;
     }
     // the latest quiet acknowledgment (idle/setup) lives under the dialogue
     const quiet = (s.checks || []).find(c => !c.failed);
-    if (quiet && quiet.suppressed === "misfire" && quiet === (s.checks || [])[0]) {
+    el("quietline").classList.toggle("live", !!quietLive);
+    if (quietLive) {
+      el("quietline").hidden = false;
+      el("quietline").innerHTML = chemHTML(quietLive.slice(0, 160));
+    } else if (quiet && quiet.suppressed === "misfire" && quiet === (s.checks || [])[0]) {
       el("quietline").hidden = true;    // a misfired claim shows nothing at all
     } else if (quiet && (quiet.kind === "idle" || quiet.kind === "setup")
         && quiet === (s.checks || [])[0]) {
@@ -1363,23 +1422,48 @@
     if (elem) elem.classList.add("anchored");
     el("chatbox").placeholder = "What about this? (Enter to just ask that)";
     el("chatbox").focus();
+    // one tap for the obvious ask about the pointed thing (suggestion
+    // 2026-10-29: clicking a relation named "definition" seemed to do
+    // nothing — "give an option to define")
+    const act = ANCHOR_ACTIONS[a.kind];
+    el("anchoract").hidden = !act;
+    if (act) el("anchoract").textContent = act[0];
     sessionEvent("pen_point", { anchor: a });
   }
+  const ANCHOR_ACTIONS = {
+    equation: ["Define & explain", "Define this and explain it: what it says and what each symbol means."],
+    line:     ["Check this line", "Is this line right?"],
+    problem:  ["What is it asking?", "What is this problem asking me to do?"],
+    region:   ["What’s written here?", "What is written here?"],
+  };
+  el("anchoract").addEventListener("click", () => {
+    const act = anchor && ANCHOR_ACTIONS[anchor.kind];
+    if (!act) return;
+    el("chatbox").value = "";
+    sendChat(act[1]);
+  });
+  // page-level asks: a full-resolution read of the whole sheet
+  el("quickrow").querySelectorAll("[data-intent]").forEach(b =>
+    b.addEventListener("click", () => {
+      sessionEvent("quick_ask", { intent: b.dataset.intent });
+      sendChat("", b.dataset.intent);
+    }));
 
   function clearAnchor() {
     anchor = null;
     el("anchortag").hidden = true;
+    el("anchoract").hidden = true;
     el("chatbox").placeholder = "Ask — or click a line or relation above to point at it";
     document.querySelectorAll(".anchored").forEach(d => d.classList.remove("anchored"));
   }
   el("anchortag").addEventListener("click", clearAnchor);
 
   // ---------- chat ----------
-  async function sendChat(text) {
+  async function sendChat(text, intent) {
     chatWaiting = true;
     renderDialogue();
     if (mode === "live") await snap("chat", true);   // freshen the page image first
-    const body = { text, anchor };
+    const body = { text, anchor, intent };
     clearAnchor();
     const r = await fetch("/chat", { method: "POST", body: JSON.stringify(body) }).catch(() => null);
     if (!r?.ok) { chatWaiting = false; renderDialogue(); }
@@ -1467,9 +1551,11 @@
     if (!text) return;
     el("suggestinput").value = "";
     const r = await fetch("/suggest", { method: "POST", body: JSON.stringify({ text }) }).catch(() => null);
+    const saved = r?.ok ? ((await r.json()).saved || []) : [];
     const d = document.createElement("div");
     const t = new Date().toTimeString().slice(0, 5);
-    d.innerHTML = (r?.ok ? '<span class="ok">✓</span> ' : "✗ ") + esc(t + " — " + text);
+    d.innerHTML = (r?.ok ? '<span class="ok">✓ saved</span> ' : "✗ not saved — is cono still running? ") + esc(t + " — " + text) +
+      (devMode && saved.length ? `<br><span class="savedto">${saved.map(x => esc(x.replace(/^.*\/deskcap\//, "~/deskcap/"))).join(" · ")}</span>` : "");
     el("suggestlog").prepend(d);
   });
 
@@ -1478,7 +1564,7 @@
   // request sent, first streamed token, each reply section appearing — never
   // a timer animation. The elapsed clock is the only thing that ticks.
   const STAGE_ORDER = {
-    check: ["contrast", "zoom", "sent", "first word", "visibility", "working on", "problem",
+    check: ["skipped", "contrast", "zoom", "sent", "first word", "visibility", "working on", "problem",
             "on page", "tally", "check", "kind", "grid", "equations", "done"],
     chat:  ["crop", "zoom", "sent", "first word", "done"],
   };
@@ -1486,7 +1572,7 @@
     contrast: "contrast", sent: "sent", "first word": "model", visibility: "vis",
     "working on": "work", problem: "prob", "on page": "page", tally: "tally",
     check: "check", kind: "kind", grid: "grid", equations: "eqns",
-    done: "done", crop: "crop", zoom: "zoom",
+    done: "done", crop: "crop", zoom: "zoom", skipped: "no page · not sent",
   };
 
   function renderStages() {
@@ -1502,7 +1588,7 @@
     const byName = {};
     run.stages.forEach(s => { byName[s.stage] = s.ms; });
     const order = STAGE_ORDER[run.kind] || STAGE_ORDER.check;
-    const optional = ["crop", "zoom"];  // only shown on the runs that used them
+    const optional = ["crop", "zoom", "skipped"];  // only shown on the runs that used them
     const chips = order.filter(n => n in byName || !optional.includes(n));
     const lastHit = run.stages.length ? run.stages[run.stages.length - 1].stage : null;
     el("stagestrip").innerHTML = chips.map(n => {
@@ -1526,13 +1612,29 @@
   el("stagebtn").textContent = "stage trace: " + (stageTrace ? "on" : "off");
 
   // ---------- SSE: streamed text ----------
+  // a finished stream keeps showing until /state carries its saved message
+  // (deleting it on "done" blanked the reply for one poll round-trip)
+  function settleLive(id) {
+    const v = live.get(id);
+    if (v) { v.done = true; v.doneAt = Date.now(); }
+  }
+  function pruneLive(s) {
+    const ids = new Set([...(s.thread || []), ...(s.checks || [])].map(m => m.id));
+    for (const [id, v] of live)
+      if (v.done && (ids.has(id) || Date.now() - v.doneAt > 3000)) live.delete(id);
+  }
+
   function startEvents() {
     const es = new EventSource("/events");
     es.onmessage = m => {
       let ev;
       try { ev = JSON.parse(m.data); } catch { return; }
       if (ev.type === "check_partial") {
-        liveCheck = ev;
+        // WORKING ON arrives before CHECK: "nothing new" (or an unreadable
+        // frame) means this one belongs in the quiet line, not a note bubble
+        const quiet = /^nothing new/i.test(ev.working_on || "") ||
+                      (ev.visibility != null && ev.visibility <= 3);
+        live.set(ev.id, { kind: "check", text: ev.check || "", quiet });
         const pinned = lastState?.twin?.pinned;
         // a pinned card never flashes back to an earlier problem mid-stream
         if (ev.problem && ev.problem.label && (!pinned || ev.problem.label === pinned)) {
@@ -1543,16 +1645,17 @@
         }
         renderDialogue();
       } else if (ev.type === "check_start") {
-        liveCheck = { id: ev.id, check: "" };
+        live.set(ev.id, { kind: "check", text: "", quiet: false });
         stageRun = { kind: "check", id: ev.id, stages: [], start: Date.now(), done: false };
         renderDialogue();
         renderStages();
       } else if (ev.type === "check_done") {
-        liveCheck = null;
+        settleLive(ev.id);
         if (stageRun && stageRun.kind === "check" && stageRun.id === ev.id) stageRun.done = true;
         renderStages();
         poll.soon();
       } else if (ev.type === "chat_start") {
+        live.set(ev.id, { kind: "chat", text: "" });
         stageRun = { kind: "chat", id: ev.id, stages: [], start: Date.now(), done: false };
         renderStages();
       } else if (ev.type === "stage") {
@@ -1563,10 +1666,10 @@
         }
       } else if (ev.type === "chat_partial") {
         chatWaiting = false;
-        liveChat = ev;
+        live.set(ev.id, { kind: "chat", text: ev.text || "" });
         renderDialogue();
       } else if (ev.type === "chat_done") {
-        liveChat = null;
+        settleLive(ev.id);
         chatWaiting = false;
         if (stageRun && stageRun.kind === "chat" && stageRun.id === ev.id) stageRun.done = true;
         renderStages();
@@ -1583,9 +1686,8 @@
   let session = null;   // live-mode recorders: {timers, signal, paused, lastDense, ...}
   let sessionMs = 0;    // server's elapsed recording clock
 
-  function sessionEvent(type, extra = {}) {
-    if (lastState?.session_active)
-      fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) });
+  function sessionEvent(type, extra = {}) {   // run log always; the bundle too while recording
+    fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) }).catch(() => null);
   }
 
   function attachRecorders() {          // live mode: the browser is the camera
@@ -1619,16 +1721,26 @@
 
   function renderRec(s) {
     sessionMs = s.session_ms || 0;
+    const canRecord = mode === "live" || mode === "deskview";
     if (s.session_active) {
       el("rec").hidden = false;
+      el("rec").classList.remove("off");
       const m = Math.floor(sessionMs / 60000), sec = Math.floor(sessionMs / 1000) % 60;
       el("rec").textContent = (session?.paused ? "recording paused · " : "recording · ") +
                               m + ":" + String(sec).padStart(2, "0");
       el("endbtn").hidden = false;
+      el("recbtn").hidden = true;
       if (mode === "live" && !session) attachRecorders();
     } else {
-      el("rec").hidden = true;
+      // not recording is never silent: the header says so and the control
+      // to start again sits where End & rate was (suggestion 2026-10-29:
+      // "MAKE a start recording button"). Checks, chats, ratings and
+      // suggestions still land in the run log either way.
+      el("rec").hidden = !canRecord;
+      el("rec").classList.add("off");
+      el("rec").textContent = "not recording";
       el("endbtn").hidden = true;
+      el("recbtn").hidden = !canRecord || !el("sessionpanel").hidden;
       detachRecorders();
     }
   }
@@ -1647,8 +1759,8 @@
   }
 
   function annotate(info) {
-    const entries = (info.checks || [])
-      .map(c => ({ snap: c.snap, check: c.check, verdict: "", wrong_kind: "", note: "" }));
+    const entries = (info.checks || []).map(c => ({ snap: c.snap, check: c.check,   // in-place ratings carry over
+      verdict: c.rating?.verdict || "", wrong_kind: c.rating?.wrong_kind || "", note: c.rating?.note || "" }));
     const p = el("sessionpanel");
     p.hidden = false;
     let i = 0;
@@ -1673,6 +1785,10 @@
         <div class="row"><input type="text" id="aNote" placeholder="What did you actually need here? (optional)"></div>
         <div class="row"><button class="quiet" id="aNext">Next</button>
         <button class="quiet" id="aSkip">Skip rating</button></div></div>`;
+      p.querySelectorAll(".verdicts .pill").forEach(b => b.classList.toggle("on", b.dataset.v === c.verdict));
+      p.querySelectorAll(".wrongkind .pill").forEach(b => b.classList.toggle("on", b.dataset.w === c.wrong_kind));
+      el("aWrongKind").hidden = c.verdict !== "wrong";
+      el("aNote").value = c.note;
       p.querySelectorAll(".verdicts .pill").forEach(b => b.onclick = () => {
         c.verdict = b.dataset.v;
         p.querySelectorAll(".verdicts .pill").forEach(x => x.classList.toggle("on", x === b));
@@ -1734,6 +1850,12 @@
   }
 
   el("endbtn").addEventListener("click", endSession);
+  el("recbtn").addEventListener("click", async () => {
+    el("recbtn").disabled = true;
+    await fetch("/session/start", { method: "POST", body: "{}" }).catch(() => null);
+    el("recbtn").disabled = false;
+    poll.soon();
+  });
 
   // ---------- state polling ----------
   let pollTimer = null;
@@ -1811,6 +1933,8 @@
       el("caption").textContent = "";
     }
     lastState = s;
+    pruneLive(s);
+    if (checksPaused !== !!s.checks_paused) renderPause(s.checks_paused);
     if ((s.thread && s.thread.length) || (s.checks && s.checks.length) || pending.length)
       el("empty")?.remove();
     renderTwin(s);

@@ -29,8 +29,32 @@ exactly that spot. There's a chemistry version too — `cono demo
 chem` replays a stoichiometry page with a mis-balanced equation and a
 significant-figures slip.
 
-You need macOS, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
-installed and logged in (`claude` does the reading — no API key setup).
+## What you need
+
+- **For the demo:** a Mac, Python 3 (nothing to `pip install`), and the
+  [Claude Code CLI](https://claude.com/claude-code) installed and logged
+  in — `claude` does the reading, so there's no API key setup. Checks run
+  on your own Claude login and count against its usage; the default
+  model is opus (`--model sonnet` is lighter).
+- **For your own paper**, one of:
+  - a Mac with built-in Desk View (M4 and later) — the intended setup;
+  - any Mac on macOS 13+ with an iPhone as the Desk View camera via
+    Continuity Camera (steps below);
+  - anything else: `cono browser`, with any camera the browser can see.
+
+  Desk View modes also need the Xcode command line tools
+  (`xcode-select --install`) to build the small capture tool on first
+  run.
+- **Run `cono/cono doctor` first** — a ten-second check of all of the
+  above, with a fix for anything missing.
+
+Good to know before a live run: Cono is in test-development mode, so
+every live run keeps photos of your page and a log of its notes in
+`~/deskcap/` on your machine — the snapshots it read and a run log
+always, plus a full session recording unless you start with
+`--no-record` (see [below](#every-live-run-is-recorded-testdev-mode)).
+Nothing leaves your Mac except what's read through your own `claude`
+login: the snapshots, close-up crops, and anything you type.
 
 ## Use it on your own work
 
@@ -89,8 +113,12 @@ off Center Stage in Control Center → Video Effects.
 
 Either way: when you pause writing, Cono snaps one frame, reads it, and
 the twin updates. There's a "Check now" button when you don't want to
-wait, and a "Pause camera" button that turns the camera fully off — in
-Desk View mode it stops the capture tool, and Continue starts it again.
+wait, and **Pause checking** when you want Cono to stop reading for a
+while: the camera picture stays on, but no snapshot is sent until you
+press **Resume checking** (Check now and typed questions still work —
+they're explicit). If the camera sees no page at all — your lap, your
+shirt, a sleeve on the lens — Cono says "No page in view" without
+sending anything; that local check never fires on a real page.
 
 Before taking it somewhere that matters (class, a tutoring session),
 run `cono doctor` — a ten-second preflight that verifies the
@@ -194,16 +222,27 @@ surface: click a transcribed line, a relation, the problem card, or a
 readability-map cell, then ask "what about this?" — the question is
 anchored to that exact thing (the model gets the element's own text,
 or, for map cells, the page region plus a full-resolution close-up).
-Earlier problems keep their own threads; "earlier notes" below the map
-holds every check with the exact snapshot and transcription behind it.
+Pointing also offers the obvious ask as one tap — **Define & explain**
+on a relation, **Check this line**, **What is it asking?**, **What's
+written here?** — and two buttons under the box ask about the whole
+sheet: **Trick questions?** (reads every printed question at full
+resolution and flags the ones with a trap — an exception to the trend,
+a reversed order, a units or sign trap — by label, without answers) and
+**Review concepts** (a short review of the background the sheet relies
+on). Earlier problems keep their own threads; "earlier notes" below the
+map holds every check with the exact snapshot and transcription behind
+it. Replies stream in place, each in its own bubble, so a check and a
+chat answer arriving at once never overwrite each other's words.
 
 **The ladder.** Cono never refuses and never blurts. Unprompted checks
 hint first: a guiding question that implies where the error is. Ask
 explicitly (type it, press "explain more", or hit "Check now" on the
 same mistake) and it gives one worked step; ask a second time and it
 gives the full answer plainly, with an offered "want to explain it back
-to me on paper?". Direct questions about what a problem means are just
-answered — no gatekeeping.
+to me on paper?" — after which checks stop hinting toward that answer
+and only verify what you write against it. Direct questions about what
+a problem means, a definition, or how something works are just answered,
+answer first ("No — …", "It doesn't, because …") — no gatekeeping.
 
 **It never argues with your page.** Two trust rules run server-side on
 every note. Cono doesn't repeat itself: every piece of advice it gives is
@@ -250,6 +289,36 @@ And the cone: the little 3D cone in the header (Cono, cone) spins while
 a check or chat reply is being read and rests when the desk is quiet —
 a glanceable "is it reading" mark, pure inline SVG + CSS.
 
+## Logo
+
+The header cone and "Cono" wordmark are also exported as standalone files
+in `brand/`, for Canva, Figma, or anywhere outside the page:
+
+| File | Use |
+|---|---|
+| `cono-logo-light-ink` | cone + wordmark, cream text, for dark backgrounds |
+| `cono-logo-dark-ink` | cone + wordmark, near-black text, for light backgrounds |
+| `cono-logo-on-desk` | exactly as in the header, on the desk brown |
+| `cono-icon` | cone only, transparent |
+| `cono-icon-square-desk` | cone on desk brown, square (profile pic, app icon) |
+| `cono-logo-figma-board.svg` | every variant plus the palette on one board |
+
+Each comes as SVG (sharp at any size, recolorable) and transparent PNG
+(3000 px wide; icons 2048 px tall). The wordmark is outlined Avenir Next
+Demi Bold, so it never falls back to another font. In Canva: Uploads →
+Upload files. In Figma: drag the board in, or copy its SVG text and paste
+— either gives editable vector layers named "Cono logo / light ink",
+"Swatch / Lamp", and so on.
+
+The palette is the page's own: desk `#1a1712`, paper `#f4efe4`, lamp
+`#f2b32c`, cone body `#8a6f3c` / shade `#63502d` / base `#b58b43`, leaf
+`#9ecb6b`, clay `#d9573c`.
+
+`tools/make-logo.py` regenerates `brand/` from the header's geometry
+(needs fontTools, shapely and Chrome). The cone is drawn at rest, with
+the shade extended to the cone's right edge and the rim kept inside the
+base: invisible at 17 px, but cleaner at poster size.
+
 ## Study mode and dev mode
 
 The page opens in **study mode**: just the twin and its dialogue, with
@@ -257,16 +326,21 @@ automatic defaults (writing clarity on auto, map and cone doing their
 jobs) — nothing to configure. The quiet **dev** switch under the camera
 (or starting with `--dev`) reveals the test instrumentation together:
 the check-stages trace, the writing-clarity cycler, per-check latency
-and clarity tags in the history, and the session bundle path on the ●
-indicator. Modes only change what is shown — recording and per-check
-metadata are always captured in both.
+and clarity tags in the history, the session bundle path on the ●
+indicator, and **rating pills on every note and reply** (helped /
+didn't help / wrong, wrong → misread page / advice wrong), saved the
+moment you click — no need to end the session to rate. Modes only change
+what is shown — recording and per-check metadata are always captured in
+both.
 
 **Suggest an improvement** (both modes): a small box under the history
 takes one-line suggestions mid-use ("this hint was too wordy", "the map
 lags"). Each entry is timestamped and captured with its context — the
 active problem, the last check, the current frame and mode/clarity
-config — into the session bundle and into a cumulative local file,
-`~/deskcap/suggestions.jsonl`, that survives individual sessions.
+config, and the run it came from — into the run log, the session
+bundle when one is recording, and a cumulative local file,
+`~/deskcap/suggestions.jsonl`, that survives individual sessions. The
+box confirms each one with "✓ saved" (dev mode lists the files).
 
 **Watching where the time goes** (test feature): a small "check stages"
 strip in the side column traces each in-flight check or chat reply
@@ -286,7 +360,14 @@ Cono is in full test-development mode: **every live run — Desk View or
 browser — is recorded locally for development**, from launch until you
 press "End & rate" or stop the server. There is no separate session
 mode and no timer. While recording, a ● indicator with a running clock
-stays visible in the header.
+stays visible in the header; when not recording, the header says ○ not
+recording and a **Start recording** button sits where End & rate was.
+
+**The run log never stops.** Separately from the session bundle, every
+run writes `~/deskcap/check-<timestamp>/run.jsonl` beside its frames:
+every check (with the model's raw reply), chat message and reply,
+rating, suggestion, pause and button press, in every mode, recording or
+not. Ending a session early can no longer lose what happened after it.
 
 What gets saved, all into one local folder
 (`~/deskcap/session-<timestamp>/`, with a `session.json` manifest and
@@ -300,7 +381,8 @@ pen-point, Next press and suggestion, per-check latency, stage and
 clarity metadata, and the page-change signal.
 
 **"End & rate" is the data engine**: ending the session walks you
-through rating each note (Helped / Didn't help / Wrong — skippable;
+through rating each note (pre-filled with anything you rated in place;
+Helped / Didn't help / Wrong — skippable;
 Wrong takes a one-tap sublabel, "misread the page" or "read it fine,
 advice wrong", so misreads become labeled ground truth instead of
 free-text notes) and
@@ -317,7 +399,17 @@ stage-timing columns; unrated sessions still get the latency and stage
 tables). `tools/experiment.py` replays a recording through a matrix of
 snap frequencies, image preprocessing, and prompt structures and writes
 a side-by-side `report.md`; needs Pillow (`pip install pillow`) and
-costs real `claude` calls.
+costs real `claude` calls. `tools/eval-no-page.py` re-measures the
+no-page check against every labeled check in `~/deskcap`, and
+`tools/selftest.py` runs the offline logic checks (no camera, no
+`claude` calls).
+
+**Working with shared recordings.** Collaborators get a curated set of
+real sessions privately from Yao (it isn't in this repo: the photos show
+a real desk). Ask for access, then download it into `~/deskcap` — the
+same folder and layout Cono records into — and every tool above reads it
+as if you'd recorded it yourself. The shared copy leaves out raw camera
+frames, so `--replay` needs a full recording.
 
 Handy: symlink it onto your PATH so it's one word from anywhere:
 `ln -s "$PWD/cono/cono" /opt/homebrew/bin/cono`
@@ -330,11 +422,13 @@ page ARE saved to the local session folder (see above; `--no-record`
 opts out), and only when your page has changed and settled does one
 snapshot go to the local server, which reads it through your own
 `claude` login — never more than one every 5 seconds, and typically
-just a few per problem. Every note in the
+just a few per problem (none while checking is paused, and none when no
+page is in view). Every note in the
 dialogue and the history shows exactly the frame that was read. When you
 send a chat message in browser mode, one fresh snapshot is taken so the
 answer matches what's on your desk right now; pen-pointed questions also
-send a close-up crop of the spot you clicked.
+send a close-up crop of the spot you clicked, and the whole-sheet asks
+(Trick questions? / Review concepts) send a full-resolution copy.
 
 Every check answers visibly: real feedback lands in the dialogue, and
 "nothing new" or "fix the framing" results appear as a quiet one-liner
@@ -346,8 +440,10 @@ Checks work across STEM subjects — math derivations, chemistry
 and biology worksheets — and they remember the page: feedback covers
 only what's new since the last look, in at most two sentences of chem/
 math shorthand, using the worksheet's own question labels. Snapshots are
-kept on your machine in `~/deskcap/check-<timestamp>/`. Pause camera
-stops the device entirely.
+kept on your machine in `~/deskcap/check-<timestamp>/`, with the run
+log beside them. When nothing new is on the page, the reply skips
+re-deriving the relations ("EQUATIONS: same") — about a quarter less
+output on the ~70% of checks that are "nothing new".
 
 ## How it works
 
