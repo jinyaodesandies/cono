@@ -3,16 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cono check</title>
+<title>Cono</title>
 <style>
   :root {
-    --desk: #1e1b17;
-    --surface: #2a2621;
-    --line: #3a342c;
-    --paper: #f2ede3;
-    --faded: #a89c8a;
-    --lamp: #e0a62e;
-    --leaf: #93b578;
+    /* The Study Lamp — a warm pool of lamplight on a night desk.
+       Legibility first (dim classrooms): three distinct ink weights.
+       One luminous accent (the lamp); green/clay stay semantic + far apart. */
+    --desk: #1a1712;          /* deep warm desk brown */
+    --surface: #262019;       /* panel — paper catching light */
+    --line: #3d3426;          /* warm hairline */
+    --paper: #f4efe4;         /* primary ink (~14:1) */
+    --ink: #cdc1aa;           /* secondary ink, legible in dim rooms (~9:1) */
+    --faded: #b1a488;         /* tertiary only — timestamps, hints (~7:1) */
+    --lamp: #f2b32c;          /* the lamp glow: unknowns, focus, in-flight */
+    --lamp-dim: rgba(242, 179, 44, 0.14);
+    --leaf: #9ecb6b;          /* read / confirm — a green pen */
+    --clay: #d9573c;          /* can't read / fix — brick red, clearly not amber */
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -36,7 +42,40 @@
     padding: 18px 26px 10px;
   }
   header h1 { font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
+
+  /* the Cono cone: spins (a sheen sweeping its surface) while a check or
+     chat reply is being read; rests otherwise. Pure inline SVG + CSS. */
+  .cone { width: 17px; height: 19px; margin-right: 8px; vertical-align: -2px; }
+  .cone .sheen, .cone .shade { transform: skewX(-6deg) translateX(-9px); }
+  .cone .shade { transform: skewX(-6deg) translateX(14px); }
+  body.busy .cone .sheen { animation: conespin 1.6s linear infinite; }
+  body.busy .cone .shade { animation: conespin 1.6s linear infinite; animation-delay: -0.8s; }
+  @keyframes conespin {
+    from { transform: skewX(-6deg) translateX(-9px); }
+    to   { transform: skewX(-6deg) translateX(27px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.busy .cone .sheen, body.busy .cone .shade { animation: none; }
+  }
   header .demo-mark { color: var(--faded); font-size: 14px; }
+  .viewtoggle {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+  }
+  .viewtoggle .vt {
+    background: none;
+    border: none;
+    color: var(--faded);
+    font-size: 13px;
+    padding: 3px 13px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .viewtoggle .vt:hover { color: var(--paper); }
+  .viewtoggle .vt.on { background: var(--lamp-dim); color: var(--lamp); }
   header .status { color: var(--faded); font-size: 14px; }
   header .status b { color: var(--lamp); font-weight: 500; }
   header .status b.calm { color: var(--faded); }
@@ -74,32 +113,221 @@
   }
   @media (max-width: 900px) {
     main { grid-template-columns: 1fr; }
-    .stage { padding: 16px; }
   }
 
-  /* the pool of lamplight: the live page */
-  .stage {
-    position: relative;
-    align-self: start;
-    border-radius: 6px;
-    padding: 34px;
-    background: radial-gradient(85% 90% at 50% 38%,
-                rgba(224, 166, 46, 0.16), rgba(224, 166, 46, 0.035) 58%, transparent 78%);
-    transition: background 0.6s;
+  /* ---------- Ambient face: camera is the hero, notes are the margin ----
+     Same DOM, same plumbing — only which column is wide, and which of the
+     twin's analytical panels are shown, changes. */
+  body.view-ambient main { grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr); }
+  body.view-ambient .twin { order: 2; }         /* notes margin, right */
+  body.view-ambient .side { order: 1; }         /* camera hero, left */
+  body.view-ambient .twin {
+    background: none;
+    border: none;
+    padding: 0;
   }
-  body.paused .stage { background: none; }
-  .stage .frame-wrap { position: relative; }
+  body.view-ambient .equations,
+  body.view-ambient .onpagebox { display: none; }   /* the analytical panels rest */
+  body.view-ambient .probcard { border-bottom: 1px solid var(--line); }
+  body.view-ambient .stage .frame-wrap { aspect-ratio: 4 / 3; }
+  body.view-ambient .camhead h3 { font-size: 15px; }
+  /* in ambient the camera caption leads; the twin's note stream is quieter */
+  body.view-ambient .dialogue .msg.cono { font-size: 15px; }
+  body:not(.view-ambient) .ambient-only { display: none; }
+
+  /* ---------- the digital twin: the sheet of paper, reborn ---------- */
+  .twin {
+    min-width: 0;
+    background: radial-gradient(90% 80% at 50% 20%,
+                rgba(242, 179, 44, 0.10), rgba(242, 179, 44, 0.02) 60%, transparent 80%);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 22px 24px 18px;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .probcard {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 14px;
+  }
+  .probtop { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .problabel {
+    font-size: 13px;
+    padding: 3px 12px;
+    border: 1px solid var(--lamp);
+    border-radius: 999px;
+    color: var(--lamp);
+    white-space: nowrap;
+  }
+  .probprog { color: var(--ink); font-size: 13.5px; font-style: italic; flex: 1; min-width: 0; }
+  .probq {
+    margin-top: 10px;
+    font-size: 19px;
+    line-height: 1.4;
+    max-width: 52ch;
+  }
+  .probq.placeholder { color: var(--faded); font-size: 15px; }
+  .pill {
+    color: var(--paper);
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 20px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .pill:hover { border-color: var(--lamp); color: var(--lamp); }
+  .pill:disabled { color: var(--faded); border-color: var(--line); cursor: default; }
+  .pill.small { padding: 4px 14px; font-size: 13px; }
+  .pill.resume { border-color: var(--lamp); color: var(--lamp); }
+
+  .equations h3, .maphead h3 {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faded);
+    margin-bottom: 6px;
+  }
+  .eq {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 3px 6px;
+    margin: 0 -6px;
+    border-radius: 4px;
+    font-family: Charter, Georgia, serif;
+    font-size: 19px;
+    cursor: pointer;
+  }
+  .eq:hover { background: rgba(242, 179, 44, 0.08); }
+  .eq.anchored, .onpline.anchored, .probq.anchored { outline: 1px dashed var(--lamp); outline-offset: 2px; }
+  .onpagebox h3 { font-size: 11.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faded); margin-bottom: 6px; }
+  #onpagelines {
+    font-family: Charter, Georgia, serif;
+    font-size: 14.5px;
+    line-height: 1.5;
+    max-height: 170px;
+    overflow-y: auto;
+    border-left: 2px solid var(--line);
+    padding-left: 12px;
+  }
+  .onpline { padding: 1px 6px 1px 2px; border-radius: 3px; cursor: pointer; }
+  .onpline:hover { background: rgba(242, 179, 44, 0.08); }
+  .probq { cursor: pointer; border-radius: 4px; }
+  .probq:hover { background: rgba(242, 179, 44, 0.06); }
+  sub, sup { font-size: 0.72em; }
+  .eq .eqname { font-family: "Avenir Next", Avenir, sans-serif; font-size: 12.5px; color: var(--ink); }
+  .eq sub, .eq sup { font-size: 0.68em; }
+  .eq .unk {
+    color: var(--lamp);
+    font-weight: 700;
+    padding: 0 2px;
+  }
+  .eq .arrow { color: var(--leaf); }
+
+  /* dialogue anchored to the problem card */
+  .dialogue { display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
+  .dialogue .empty { color: var(--faded); max-width: 48ch; font-size: 14px; padding: 6px 0; }
+  .msg { max-width: 56ch; font-size: 16px; line-height: 1.5; }
+  .msg .mtext { white-space: pre-line; }   /* page scans and reviews come one item per line */
+  .msg .mtime { color: var(--faded); font-size: 12px; margin-left: 8px; }
+  .msg.cono { border-left: 2px solid var(--line); padding-left: 14px; }
+  .msg.cono.confirm { border-left-color: var(--leaf); }
+  .msg.cono.confirm .mtext::before { content: "✓ "; color: var(--leaf); }
+  .msg.cono.fix { border-left-color: var(--lamp); }
+  .msg.cono.fix .mtext::before { content: "✎ "; color: var(--lamp); }
+  .msg.you {
+    align-self: flex-end;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px 12px 2px 12px;
+    padding: 7px 14px;
+    font-size: 15px;
+  }
+  .msg.live .mtext::after { content: "▍"; color: var(--lamp); animation: breathe 1s infinite; }
+  .msg .mthumb { height: 34px; border-radius: 3px; vertical-align: middle; margin-left: 8px; opacity: 0.8; }
+  .morebtn {
+    background: none; border: none; cursor: pointer;
+    color: var(--faded); font-size: 13px; padding: 2px 0 0; text-decoration: underline;
+  }
+  .morebtn:hover { color: var(--lamp); }
+  .quietline { color: var(--faded); font-size: 13.5px; padding: 2px 0; }
+  .quietline.live::after { content: "▍"; color: var(--faded); animation: breathe 1s infinite; }
+  /* dev mode: rate a note where it stands — no need to end the session */
+  .rate { display: inline-flex; gap: 6px; margin-left: 10px; vertical-align: middle; }
+  body:not(.dev) .rate { display: none; }
+  .rate button {
+    background: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+    color: var(--faded); font-size: 11.5px; padding: 1px 8px;
+  }
+  .rate button:hover { color: var(--paper); }
+  .rate button.on { border-color: var(--lamp); color: var(--lamp); }
+  .rate button.on[data-v=wrong], .rate button.on[data-w] { border-color: var(--clay); color: var(--clay); }
+  /* one-tap asks: the pointed thing, and the whole page */
+  .quickrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: -4px; }
+  .chipbtn {
+    background: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+    color: var(--ink); font-size: 12.5px; padding: 3px 11px; white-space: nowrap;
+  }
+  .chipbtn:hover { border-color: var(--lamp); color: var(--lamp); }
+  .chipbtn:disabled { color: var(--faded); border-color: var(--line); cursor: default; }
+  .pendingline { display: flex; gap: 10px; align-items: center; color: var(--faded); font-size: 13.5px; }
+  .pendingline img { height: 34px; border-radius: 3px; }
+
+  .askrow { display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 14px; }
+  .askrow input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--paper);
+    font: inherit;
+    font-size: 14.5px;
+    padding: 8px 16px;
+  }
+  .askrow input:focus { outline: none; border-color: var(--lamp); }
+  .anchortag {
+    color: var(--lamp);
+    font-size: 13px;
+    border: 1px dashed var(--lamp);
+    border-radius: 999px;
+    padding: 3px 10px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* ---------- side: live video for framing + readability map ---------- */
+  .side { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .stage { position: relative; }
+  .stage .frame-wrap {
+    position: relative;
+    aspect-ratio: 4 / 3;              /* a real viewfinder, never a thin strip */
+    border-radius: 4px;
+    background: #14100a;
+    box-shadow: 0 1px 0 rgba(242, 237, 227, 0.1) inset, 0 12px 34px -14px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+  }
   .stage video, .stage img.replay {
     display: block;
     width: 100%;
+    height: 100%;
+    object-fit: contain;
     border-radius: 4px;
-    box-shadow: 0 1px 0 rgba(242, 237, 227, 0.14) inset,
-                0 18px 50px -18px rgba(0, 0, 0, 0.75);
-    background: #15130f;
-    min-height: 220px;
+    background: #14100a;
   }
   .stage img.replay { position: absolute; inset: 0; transition: opacity 0.25s; }
   .stage img.replay.under { position: static; }
+  .camwait {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--faded);
+    font-size: 13.5px;
+  }
   @media (prefers-reduced-motion: reduce) { .stage img.replay { transition: none; } }
   .stage .snapring {
     position: absolute; inset: -2px;
@@ -112,77 +340,42 @@
   @keyframes ringpulse { 0% { opacity: 0.9; } 100% { opacity: 0; } }
   .stage .offline {
     display: none;
-    padding: 70px 30px;
+    position: absolute;
+    inset: 0;
+    padding: 36px 22px;
     text-align: center;
     color: var(--faded);
     background: var(--surface);
     border-radius: 4px;
-    min-height: 220px;
+    overflow-y: auto;
   }
-  .stage .offline h2 { color: var(--paper); font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-  .stage .offline p { max-width: 44ch; margin: 0 auto 14px; }
-  .stage figcaption {
-    margin-top: 12px;
-    text-align: center;
-    color: var(--faded);
-    font-size: 13.5px;
-  }
-  .controls {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 18px;
-    flex-wrap: wrap;
-    margin-top: 14px;
-  }
-  .pill {
-    color: var(--paper);
-    background: none;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 7px 20px;
-    font-size: 14px;
-    cursor: pointer;
-  }
-  .pill:hover { border-color: var(--lamp); color: var(--lamp); }
-  .pill:disabled { color: var(--faded); border-color: var(--line); cursor: default; }
-  .pill.resume { border-color: var(--lamp); color: var(--lamp); }
+  .stage .offline h2 { color: var(--paper); font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .stage .offline p { max-width: 44ch; margin: 0 auto 14px; font-size: 13.5px; }
+  .stage figcaption { margin-top: 8px; color: var(--ink); font-size: 12.5px; }
+  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
   .quiet {
     background: none;
     border: none;
     color: var(--faded);
-    font-size: 14px;
+    font-size: 13.5px;
     cursor: pointer;
-    padding: 4px 2px;
+    padding: 4px 0;
   }
   .quiet:hover { color: var(--paper); }
   select.camera {
-    background: none;
-    border: none;
-    color: var(--faded);
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-    max-width: 240px;
+    background: none; border: none; color: var(--faded);
+    font: inherit; font-size: 13.5px; cursor: pointer; max-width: 220px;
   }
   select.camera:hover { color: var(--paper); }
   select.camera option { background: var(--surface); color: var(--paper); }
-  .pill:focus-visible, .quiet:focus-visible, select.camera:focus-visible,
-  a:focus-visible, summary:focus-visible {
+  .pill:focus-visible, .quiet:focus-visible, select.camera:focus-visible, .morebtn:focus-visible,
+  a:focus-visible, summary:focus-visible, .anchortag:focus-visible {
     outline: 2px solid var(--lamp);
     outline-offset: 2px;
   }
 
-  /* margin notes: the checks */
-  .notes { min-width: 0; }
-  .ribbon {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 0 2px 12px;
-    border-bottom: 1px solid var(--line);
-    margin-bottom: 4px;
-  }
+  .readability { border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+  .maphead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
   .chip {
     font-size: 13px;
     padding: 3px 10px;
@@ -190,90 +383,96 @@
     border: 1px solid var(--line);
     color: var(--leaf);
     white-space: nowrap;
-    cursor: pointer;
     text-decoration: none;
   }
   .chip.mid { color: var(--lamp); }
-  .chip.poor { color: #e07a5a; border-color: #e07a5a; }
+  .chip.poor { color: var(--clay); border-color: var(--clay); }
   .workingon {
+    color: var(--faded); font-size: 13px; font-style: italic;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+  }
+  .mapbody { display: flex; gap: 14px; align-items: flex-start; }
+  #rmap {
+    display: grid;
+    gap: 3px;
+    width: 120px;
+    aspect-ratio: 8.5 / 11;
+    padding: 5px;
+    background: rgba(242, 237, 227, 0.06);
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  #rmap .cell { border-radius: 2px; background: rgba(242, 237, 227, 0.05); cursor: pointer; border: none; padding: 0; }
+  #rmap .cell.r2 { background: rgba(158, 203, 107, 0.65); }
+  #rmap .cell.r1 { background: rgba(217, 87, 60, 0.75); }
+  #rmap .cell:hover { outline: 1px solid var(--lamp); }
+  .maplegend { color: var(--ink); font-size: 12.5px; max-width: 24ch; }
+  .maplegend .lg { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .maplegend .lg.read { background: rgba(158, 203, 107, 0.65); }
+  .maplegend .lg.cant { background: rgba(217, 87, 60, 0.75); }
+  .maptime { color: var(--faded); font-size: 12px; }
+  .reframe { color: var(--lamp); font-size: 13.5px; }
+
+  /* check-stage trace (test feature) */
+  .stagebox { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; }
+  .stagebox .testmark {
+    font-size: 10px; font-weight: 400; letter-spacing: normal; text-transform: lowercase;
+    border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px;
+    color: var(--faded); margin-left: 4px; vertical-align: 1px;
+  }
+  .stagestrip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .stagechip {
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: rgba(242, 237, 227, 0.05);
     color: var(--faded);
-    font-size: 13.5px;
-    font-style: italic;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
-  .reframe {
-    color: var(--lamp);
-    font-size: 13.5px;
-    padding: 8px 2px;
-    border-bottom: 1px solid var(--line);
-    margin-bottom: 4px;
-  }
-  .notes .empty { color: var(--faded); padding: 40px 6px; max-width: 40ch; }
-  .check {
-    border-top: 1px solid var(--line);
-    padding: 16px 2px 20px;
-  }
-  .check:first-child { border-top: none; }
-  .check .meta {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    color: var(--faded);
-    font-size: 13px;
-    margin-bottom: 8px;
-  }
-  .check .meta img {
-    height: 40px;
-    border-radius: 4px;
-    display: block;
-  }
-  .check .say {
-    font-size: 17px;
-    line-height: 1.5;
-    max-width: 46ch;
+  .stagechip.hit { background: rgba(158, 203, 107, 0.16); color: var(--leaf); }
+  .stagechip.cur { background: rgba(242, 179, 44, 0.18); color: var(--lamp); animation: breathe 1.2s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .stagechip.cur { animation: none; } }
+
+  details.older summary { cursor: pointer; color: var(--faded); font-size: 13.5px; padding: 4px 0; }
+  .suggestrow { display: flex; gap: 8px; margin: 8px 0; }
+  .suggestrow input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
     color: var(--paper);
+    font: inherit;
+    font-size: 13.5px;
+    padding: 6px 14px;
   }
-  .check.confirm .say::before { content: "✓ "; color: var(--leaf); }
-  .check.fix .say::before { content: "✎ "; color: var(--lamp); }
-  .check.confirm { border-left: 2px solid var(--leaf); padding-left: 14px; }
-  .check.fix { border-left: 2px solid var(--lamp); padding-left: 14px; }
-  .check .meta { margin-top: 10px; margin-bottom: 0; }
-  details.read summary { color: var(--faded); font-size: 13px; cursor: pointer; }
-  details.phonehelp { margin: 10px auto 0; max-width: 56ch; text-align: left; }
-  details.phonehelp summary { color: var(--faded); font-size: 13px; cursor: pointer; text-align: center; }
+  .suggestrow input:focus { outline: none; border-color: var(--lamp); }
+  #suggestlog { color: var(--faded); font-size: 12.5px; }
+  #suggestlog div { padding: 2px 0; }
+  #suggestlog .ok { color: var(--leaf); }
+  #suggestlog .savedto { font-size: 11.5px; word-break: break-all; }
+  .hist { border-top: 1px solid var(--line); padding: 10px 0; }
+  .hist .meta { display: flex; align-items: center; gap: 10px; color: var(--faded); font-size: 12.5px; margin-bottom: 4px; }
+  .hist .meta img { height: 32px; border-radius: 3px; display: block; }
+  .hist .say { font-size: 14px; max-width: 46ch; }
+  .hist.confirm .say::before { content: "✓ "; color: var(--leaf); }
+  .hist.fix .say::before { content: "✎ "; color: var(--lamp); }
+  .hist .retry { color: var(--lamp); cursor: pointer; background: none; border: none; font-size: 13px; padding: 0; text-decoration: underline; }
+  details.read summary { color: var(--faded); font-size: 12.5px; cursor: pointer; }
+  details.phonehelp { margin: 10px 0 0; max-width: 56ch; }
+  details.phonehelp summary { color: var(--faded); font-size: 13px; cursor: pointer; }
   details.phonehelp ol { margin: 10px 0 0 22px; color: var(--faded); font-size: 13.5px; line-height: 1.5; }
   details.phonehelp li { margin-bottom: 8px; }
   details.phonehelp b { color: var(--paper); font-weight: 600; }
   details.read .onpage {
     font-family: Charter, Georgia, serif;
-    font-size: 14px;
+    font-size: 13.5px;
     line-height: 1.55;
     white-space: pre-wrap;
     border-left: 2px solid var(--line);
-    padding: 2px 0 2px 14px;
-    margin: 8px 0 0;
+    padding: 2px 0 2px 12px;
+    margin: 6px 0 0;
     max-width: 60ch;
-  }
-  .check .more { color: var(--faded); font-size: 13.5px; max-width: 50ch; margin-top: 8px; }
-  .check .retry { color: var(--lamp); cursor: pointer; background: none; border: none; font-size: 14px; padding: 0; text-decoration: underline; }
-  .pendingline {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    color: var(--faded);
-    font-size: 13.5px;
-    padding: 10px 2px;
-    border-bottom: 1px solid var(--line);
-  }
-  .pendingline img { height: 40px; border-radius: 4px; }
-  details.older { margin-top: 10px; }
-  details.older summary {
-    cursor: pointer;
-    color: var(--faded);
-    font-size: 13.5px;
-    padding: 8px 2px;
   }
 
   .flier {
@@ -288,6 +487,8 @@
   /* 10-minute recorded session */
   header .rec { color: var(--lamp); font-size: 14px; }
   header .rec::before { content: "● "; }
+  header .rec.off { color: var(--faded); }
+  header .rec.off::before { content: "○ "; }
   .panel {
     background: var(--surface);
     border: 1px solid var(--line);
@@ -295,8 +496,6 @@
     padding: 20px 22px;
     margin-top: 14px;
     max-width: 56ch;
-    margin-left: auto;
-    margin-right: auto;
   }
   .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
   .panel p { color: var(--faded); font-size: 14px; margin-bottom: 10px; }
@@ -314,68 +513,157 @@
   .panel .checkview { display: flex; gap: 14px; margin: 12px 0; }
   .panel .checkview img { height: 76px; border-radius: 4px; }
   .panel .checkview .note { font-size: 14px; color: var(--paper); max-width: 44ch; }
-  .panel .verdicts button.on { border-color: var(--lamp); color: var(--lamp); }
-  .framingline { color: var(--lamp); font-size: 13.5px; text-align: center; margin-top: 8px; }
+  .panel .verdicts button.on, .panel .wrongkind button.on { border-color: var(--lamp); color: var(--lamp); }
+  .panel .verdicts [data-v=wrong].on, .panel .wrongkind button.on { border-color: var(--clay); color: var(--clay); }
+  .framingline { color: var(--lamp); font-size: 13px; margin-top: 6px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Cono check</h1>
+  <h1><svg class="cone" viewBox="0 0 24 27" aria-hidden="true">
+    <defs><clipPath id="coneclip"><path d="M12 1.5 L21.6 21 A9.6 3.6 0 0 1 2.4 21 Z"/></clipPath></defs>
+    <path d="M12 1.5 L21.6 21 A9.6 3.6 0 0 1 2.4 21 Z" fill="#8a6f3c"/>
+    <g clip-path="url(#coneclip)">
+      <rect class="sheen" x="0" y="0" width="7" height="27" fill="rgba(242,237,227,0.45)"/>
+      <rect class="shade" x="0" y="0" width="7" height="27" fill="rgba(26,23,18,0.35)"/>
+    </g>
+    <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="#b58b43"/>
+    <ellipse cx="12" cy="21" rx="9.6" ry="3.6" fill="none" stroke="rgba(242,237,227,0.25)" stroke-width="0.6"/>
+  </svg>Cono</h1>
   <span class="demo-mark" id="demomark" hidden>demo</span>
+  <span class="viewtoggle" id="viewtoggle" role="tablist" aria-label="View" hidden>
+    <button class="vt" data-view="twin" type="button" role="tab">Twin</button>
+    <button class="vt" data-view="ambient" type="button" role="tab">Ambient</button>
+  </span>
   <span class="status"><span class="lampdot" id="lamp"></span><b id="statusword" class="calm">starting</b><span id="statusrest"></span></span>
   <span class="rec" id="rec" hidden></span>
 </header>
 
-<div id="banner" role="status">Lost the local server — restart cono-check in your terminal.</div>
+<div id="banner" role="status">Lost the local server — restart cono in your terminal.</div>
 
 <main>
-  <figure class="stage" id="stage">
-    <div class="frame-wrap" id="framewrap">
-      <video id="video" autoplay playsinline muted hidden></video>
-      <div class="offline" id="offline"></div>
-      <div class="snapring" id="snapring"></div>
+  <!-- the digital twin of the page -->
+  <section class="twin" aria-live="polite">
+    <div class="probcard">
+      <div class="probtop">
+        <span class="problabel" id="problabel">finding your page…</span>
+        <span class="probprog" id="probprog"></span>
+        <button class="pill small" id="nextbtn" type="button" hidden>Next problem →</button>
+      </div>
+      <p class="probq placeholder" id="probq">The problem you’re working on will be pinned
+      here, with the relations it runs on and a running dialogue about it.</p>
     </div>
-    <figcaption id="caption">Starting…</figcaption>
-    <div class="framingline" id="framingline" hidden>Fix the framing before you start working — see the first note on the right.</div>
-    <div class="controls">
-      <button class="pill" id="checknow" type="button" disabled>Check now</button>
-      <button class="quiet" id="pausebtn" type="button" hidden>Pause camera</button>
-      <button class="quiet" id="reframebtn" type="button" hidden>Re-frame Desk View</button>
-      <button class="quiet" id="sessionbtn" type="button" hidden>Record a 10-minute session</button>
-      <button class="quiet" id="endbtn" type="button" hidden>End session</button>
-      <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
+    <div class="equations" id="equations" hidden>
+      <h3>Relations</h3>
+      <div id="eqlist"></div>
     </div>
-    <details class="phonehelp" id="phonehelp" hidden>
-      <summary>Using an iPhone as the Desk View camera</summary>
-      <ol>
-        <li><b>Turn on Continuity Camera</b> on the phone (Settings → General → AirPlay &amp; Continuity),
-          then lock it and set it on the lid, landscape, rear cameras facing you. The phone has to stay
-          locked with the screen off — unlock it or pick it up and the feed stops.</li>
-        <li><b>Desk View opens but the picture is black?</b> The phone is connected but sending no video.
-          Make sure the mount or case isn't covering the rear lenses (Desk View uses the ultra-wide one),
-          and that the phone isn't in Low Power Mode or very low on battery — it stays listed as a camera
-          but stops sending frames.</li>
-        <li><b>Still black:</b> toggle Continuity Camera off, lock the phone, wait ten seconds, and toggle it
-          back on. To check it's the phone and not Cono, pick the iPhone as the camera in FaceTime — if
-          that's black too, restart both devices with Wi-Fi and Bluetooth on.</li>
-      </ol>
-    </details>
-    <div id="sessionpanel" hidden></div>
-  </figure>
-
-  <section class="notes" aria-live="polite">
-    <div class="ribbon" id="ribbon" hidden>
-      <a class="chip" id="camchip" target="_blank" rel="noopener" title="Open the latest snapshot">camera –/10</a>
-      <span class="workingon" id="workingon"></span>
+    <div class="onpagebox" id="onpagebox" hidden>
+      <h3>On the page</h3>
+      <div id="onpagelines"></div>
     </div>
-    <div class="reframe" id="reframe" hidden></div>
-    <div id="feed">
-      <p class="empty" id="empty">Put your work in front of the camera — holding the
-      page up works well. When you pause writing, Cono snaps a picture, reads it, and
-      leaves a note here. It points at mistakes and asks a question; it won't hand you
-      the answer.</p>
+    <div class="dialogue" id="dialogue">
+      <p class="empty" id="empty">Lay your page flat under the camera and start working.
+      When you pause, Cono reads the desk and leaves a note here — a pointer and a
+      question, never the blurted answer.</p>
+    </div>
+    <div class="quietline" id="quietline" hidden></div>
+    <form class="askrow" id="askform">
+      <button class="anchortag" id="anchortag" type="button" hidden title="Clear the pointed spot"></button>
+      <button class="chipbtn" id="anchoract" type="button" hidden></button>
+      <input id="chatbox" autocomplete="off" placeholder="Ask — or click a line or relation above to point at it">
+      <button class="pill" id="sendbtn" type="submit">Ask</button>
+    </form>
+    <div class="quickrow" id="quickrow">
+      <button class="chipbtn" type="button" data-intent="tricks"
+        title="Reads every printed question and flags the ones with a trap — no answers">Trick questions?</button>
+      <button class="chipbtn" type="button" data-intent="review"
+        title="A short review of the background concepts this sheet relies on">Review concepts</button>
     </div>
   </section>
+
+  <!-- the real paper: framing view + what the model could read -->
+  <aside class="side">
+    <figure class="stage" id="stage">
+      <div class="maphead"><h3>Camera</h3><span class="maptime" id="camlabel"></span></div>
+      <div class="frame-wrap" id="framewrap">
+        <video id="video" autoplay playsinline muted hidden></video>
+        <div class="camwait" id="camwait">camera starting…</div>
+        <div class="offline" id="offline"></div>
+        <div class="snapring" id="snapring"></div>
+      </div>
+      <figcaption id="caption">Starting…</figcaption>
+      <div class="framingline" id="framingline" hidden>Fix the framing before you start working — see the note in the dialogue.</div>
+      <div class="controls">
+        <button class="pill" id="checknow" type="button" disabled>Check now</button>
+        <button class="quiet" id="pausebtn" type="button" hidden
+          title="Camera stays on; nothing is sent until you resume (Check now and questions still work)">Pause checking</button>
+        <button class="quiet" id="reframebtn" type="button" hidden>Re-frame Desk View</button>
+        <button class="quiet" id="contrastbtn" type="button" hidden
+          title="Clarity pass on snapshots before reading — auto stretches contrast, strong lifts faint strokes">writing clarity: auto</button>
+        <button class="quiet" id="stagebtn" type="button" hidden
+          title="Test feature: live trace of which stage of the reading a check is in">stage trace: on</button>
+        <button class="quiet" id="endbtn" type="button" hidden>End &amp; rate</button>
+        <button class="quiet" id="recbtn" type="button" hidden
+          title="Record this run into a new session bundle in ~/deskcap">Start recording</button>
+        <select class="camera" id="camerapick" aria-label="Camera" hidden></select>
+        <button class="quiet" id="devbtn" type="button" hidden
+          title="Show the test instrumentation (stage trace, clarity control, latency tags)">dev</button>
+      </div>
+      <details class="phonehelp" id="phonehelp" hidden>
+        <summary>Using an iPhone as the Desk View camera</summary>
+        <ol>
+          <li><b>Turn on Continuity Camera</b> on the phone (Settings → General → AirPlay &amp; Continuity),
+            then lock it and set it on the lid, landscape, rear cameras facing you. The phone has to stay
+            locked with the screen off — unlock it or pick it up and the feed stops.</li>
+          <li><b>Desk View opens but the picture is black?</b> The phone is connected but sending no video.
+            Make sure the mount or case isn't covering the rear lenses (Desk View uses the ultra-wide one),
+            and that the phone isn't in Low Power Mode or very low on battery — it stays listed as a camera
+            but stops sending frames.</li>
+          <li><b>Still black:</b> toggle Continuity Camera off, lock the phone, wait ten seconds, and toggle it
+            back on. To check it's the phone and not Cono, pick the iPhone as the camera in FaceTime — if
+            that's black too, restart both devices with Wi-Fi and Bluetooth on.</li>
+        </ol>
+      </details>
+      <div id="sessionpanel" hidden></div>
+    </figure>
+
+    <div class="readability">
+      <div class="maphead">
+        <h3>Readability</h3>
+        <a class="chip" id="camchip" target="_blank" rel="noopener" title="Open the latest snapshot">camera –/10</a>
+        <span class="workingon" id="workingon"></span>
+      </div>
+      <div class="mapbody">
+        <div id="rmap" role="img" aria-label="Map of which parts of the page could be read"></div>
+        <span class="maplegend"><span class="lg read"></span>read ·
+          <span class="lg cant"></span>can’t read · dark = blank.<br>
+          Click a cell to ask about it.<br><span class="maptime" id="maptime"></span></span>
+      </div>
+    </div>
+    <div class="stagebox" id="stagebox" hidden>
+      <div class="maphead">
+        <h3>Check stages <span class="testmark">test</span></h3>
+        <span class="maptime" id="stagetime"></span>
+      </div>
+      <div class="stagestrip" id="stagestrip"></div>
+    </div>
+
+    <div class="reframe" id="reframe" hidden></div>
+
+    <details class="older" id="historybox" hidden>
+      <summary id="historysum">earlier notes</summary>
+      <div id="history"></div>
+    </details>
+
+    <details class="older suggestbox" id="suggestbox">
+      <summary>Suggest an improvement</summary>
+      <form class="suggestrow" id="suggestform">
+        <input id="suggestinput" autocomplete="off" placeholder="What should work better?">
+        <button class="pill small" type="submit">Send</button>
+      </form>
+      <div id="suggestlog"></div>
+    </details>
+  </aside>
 </main>
 
 <script>
@@ -389,7 +677,7 @@
   const el = id => document.getElementById(id);
   const esc = s => { const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; };
 
-  let mode = null;            // "live" | "replay"
+  let mode = null;            // "live" | "deskview" | "replay"
   let stream = null;
   let paused = false;
   let writing = false;        // client-side dirty state
@@ -398,9 +686,23 @@
   let manualPending = false;
   let lastGate = null, dirtySince = 0, firstLookAt = 0, armed = false, lastSnapAt = 0;
   let lastActive = 0, stuckArmed = false;
-  const STUCK_MS = 120000;
-  let lastFrameN = -1, checkCount = -1, failedAt = 0;
+  let handFloor = null, handHoldSince = 0;  // hand-aware snap hold
+  const STUCK_MS = 120000, HAND_HOLD_MS = 15000;
+  let lastFrameN = -1, failedAt = 0;
   let replayTop = null, replayUnder = null;
+  let lastState = null;       // latest /state payload
+  let anchor = null;          // {x, y} pen-point, 0-1 fractions of the page image
+  // every in-flight stream keeps its own slot, keyed by id, in start order:
+  // two checkers and a chat reply can stream at once, and a single shared
+  // slot made one stream's words vanish under another's (suggestion,
+  // 2026-10-29: "some words would disappear as the explanation builds")
+  const live = new Map();     // id -> {kind: "check"|"chat", text, quiet}
+  let chatWaiting = false;
+  let checksPaused = false;   // Pause checking: camera on, nothing sent (server-confirmed)
+  let contrastMode = "auto";  // writing clarity on snaps: off|auto|strong (server holds the truth)
+  let devMode = false;        // study mode (default) hides instrumentation; logging never stops
+  let stageTrace = localStorage.getItem("cono-stagetrace") !== "off";
+  let stageRun = null;        // test feature: {kind, id, stages:[{stage,ms}], start, done}
 
   // ---------- status line ----------
   const statusText = {
@@ -408,17 +710,21 @@
     writing:  ["you’re writing", " — will check when you pause"],
     checking: ["reading your page", "…"],
     paused:   ["paused", " — camera is off"],
+    held:     ["checking paused", " — camera on, nothing is sent"],
     starting: ["starting", ""],
   };
   function setStatus() {
     const s = paused ? "paused" : serverStatus === "checking" ? "checking"
-            : writing ? "writing" : mode ? "watching" : "starting";
+            : checksPaused ? "held" : writing ? "writing" : mode ? "watching" : "starting";
     const [word, rest] = statusText[s];
     el("statusword").textContent = word;
-    el("statusword").className = (s === "watching" || s === "paused" || s === "starting") ? "calm" : "";
+    el("statusword").className = (s === "watching" || s === "paused" || s === "held" || s === "starting") ? "calm" : "";
     el("statusrest").textContent = rest;
-    el("lamp").className = "lampdot " + s;
+    el("lamp").className = "lampdot " + (s === "held" ? "paused" : s);
     el("checknow").disabled = paused || !mode || (manualPending && serverStatus === "checking");
+    // the cone spins while anything is being read (check or chat reply)
+    document.body.classList.toggle("busy",
+      serverStatus === "checking" || chatWaiting || live.size > 0 || !!(stageRun && !stageRun.done));
   }
 
   // ---------- camera (live mode) ----------
@@ -439,12 +745,13 @@
         : ["Cono needs your camera.", "Your browser blocked camera access for this page. Allow it — usually the camera icon in the address bar — then try again."], startCamera);
     }
     el("offline").style.display = "none";
+    el("camwait").hidden = true;
     el("video").hidden = false;
     el("video").srcObject = stream;
     document.body.classList.remove("paused");
     el("pausebtn").textContent = "Pause camera";
     el("pausebtn").className = "quiet";
-    el("caption").textContent = "Live video stays on this page. Only the snapshots on the right are read by Claude.";
+    el("caption").textContent = "Framing view — live video stays on this page; only gated snapshots are read.";
     lastGate = null; dirtySince = 0; armed = false;
     firstLookAt = performance.now() + FIRST_LOOK_MS;
     fillPicker();
@@ -478,20 +785,8 @@
 
   function stopTracks() { stream?.getTracks().forEach(t => t.stop()); stream = null; }
 
-  // Desk View: pausing stops the capture tool; Continue (or Reconnect, while
-  // the camera is away) launches a fresh one, which also re-discovers the iPhone.
-  async function pauseDeskView() {
-    const r = await fetch("/camera/pause", { method: "POST" });
-    if (!r.ok) { paused = false; return; }
-    if (streamImg) streamImg.hidden = true;
-    document.body.classList.add("paused");
-    el("pausebtn").textContent = "Continue";
-    el("pausebtn").className = "pill resume";
-    showOffline(["Paused — the Desk View camera is off.",
-      "Nothing is watched or sent. Hit Continue to pick up where you left off."], resumeDeskView, "Continue");
-    el("caption").textContent = "";
-    setStatus();
-  }
+  // Desk View: Reconnect (while the camera is away) launches a fresh capture
+  // tool, which also re-discovers the iPhone.
   async function resumeDeskView() {
     const r = await fetch("/camera/retry", { method: "POST" });
     if (!r.ok) return;
@@ -499,10 +794,8 @@
     poll.capErrShown = false;
     camWaiting = false;
     document.body.classList.remove("paused");
-    el("pausebtn").textContent = "Pause camera";
-    el("pausebtn").className = "quiet";
     showOffline(["Connecting to the Desk View camera…", "Lock your iPhone and set it on the lid, rear cameras facing you. " +
-      "Black picture? See the iPhone tips under the video."]);
+      "Black picture? See the iPhone tips under the camera view."]);
     camRefresh = true;          // next /state decides: live picture, or still waiting
     setStatus();
   }
@@ -517,36 +810,30 @@
     if (!r.ok) return;
     camReframing = true;
     sessionEvent("reframe");
-    if (streamImg) streamImg.hidden = true;
     showOffline(["Re-framing in Apple's Desk View window.",
       "Drag the corners of the trapezoid around your page, then click Start Desk View. " +
       "Cono picks up the new framing by itself."], () => { camReframing = false; resumeDeskView(); }, "Skip");
     el("caption").textContent = "";
   });
 
-  let camBusy = false;          // one pause/continue request at a time (a double-click must not undo itself)
-  el("pausebtn").addEventListener("click", () => {
+  // Pause checking (suggestion 2026-10-29: "a start and pause sending
+  // button, worded better"): the camera and the recording keep running, but
+  // no automatic snapshot is sent until Resume. Check now and typed questions
+  // are explicit, so they still go out. Same control in every mode.
+  let camBusy = false;          // one request at a time (a double-click must not undo itself)
+  el("pausebtn").addEventListener("click", async () => {
     if (camBusy) return;
-    paused = !paused;
-    if (session) { session.paused = paused; sessionEvent(paused ? "pause" : "resume"); }
-    if (mode === "deskview") {
-      camBusy = true;
-      (paused ? pauseDeskView() : resumeDeskView()).finally(() => { camBusy = false; });
-      return;
-    }
-    if (paused) {
-      stopTracks();
-      document.body.classList.add("paused");
-      el("pausebtn").textContent = "Resume camera";
-      el("pausebtn").className = "pill resume";
-      showOffline(["Camera is off.", "Nothing is watched or sent."], false);
-      el("caption").textContent = "";
-      writing = false;
-      setStatus();
-    } else {
-      startCamera().then(setStatus);
-    }
+    camBusy = true;
+    const r = await fetch("/pause", { method: "POST", body: JSON.stringify({ on: !checksPaused }) }).catch(() => null);
+    camBusy = false;
+    if (r?.ok) renderPause((await r.json()).on);
   });
+  function renderPause(on) {
+    checksPaused = !!on;
+    el("pausebtn").textContent = checksPaused ? "Resume checking" : "Pause checking";
+    el("pausebtn").className = checksPaused ? "pill small resume" : "quiet";
+    setStatus();
+  }
 
   // ---------- gating + snaps (live mode) ----------
   const gateCanvas = document.createElement("canvas");
@@ -560,6 +847,18 @@
     const gray = new Uint8Array(GATE_W * GATE_H);
     for (let i = 0; i < gray.length; i++)
       gray[i] = (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2]) / 3;
+    // hand detection for the snap hold: skin-tone fraction vs an adaptive
+    // floor (warm desks read as skin at a constant rate; the floor drifts up
+    // slowly so a permanently resting hand becomes the new normal)
+    let skin = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      if (r > 95 && g > 40 && b > 20 && r > g + 15 && r > b + 15) skin++;
+    }
+    const skinFrac = skin / (px.length / 4);
+    if (handFloor === null || skinFrac < handFloor) handFloor = skinFrac;
+    else handFloor = Math.min(handFloor + 0.0001, skinFrac);
+    const handIn = skinFrac > handFloor + 0.03;
     let changed = null;
     if (lastGate) {
       let n = 0;
@@ -575,82 +874,268 @@
     const elapsed = session ? (now - session.start) / 1000 : -1;
     const minGap = session ? (elapsed < 200 ? 5000 : elapsed < 400 ? 12000 : 20000) : MIN_GAP_MS;
     const gapOk = now - lastSnapAt >= minGap;
+    // hand-aware hold (57/70 corpus checks were shot through a hand): an
+    // automatic snap waits for a hand-free stable frame, at most 15 s —
+    // a resting hand never blocks checks forever
+    const wantSettle = dirtySince && changed !== null && changed < STABLE_AT && gapOk;
+    const wantOverdue = dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk;
+    if ((wantSettle || wantOverdue) && handIn && !handHoldSince) handHoldSince = now;
+    if (!handIn) handHoldSince = 0;
+    const holding = handIn && handHoldSince && now - handHoldSince < HAND_HOLD_MS;
     if (!armed && now >= firstLookAt) { armed = true; lastSnapAt = now; snap("first look"); }
-    else if (dirtySince && changed !== null && changed < STABLE_AT && gapOk) { dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
-    else if (dirtySince && now - dirtySince > MAX_DIRTY_MS && gapOk) { dirtySince = now; lastSnapAt = now; snap("checking in"); }
+    else if (wantSettle && !holding) { handHoldSince = 0; dirtySince = 0; writing = false; lastSnapAt = now; snap("page settled"); }
+    else if (wantOverdue && !holding) { handHoldSince = 0; dirtySince = now; lastSnapAt = now; snap("checking in"); }
     else if (armed && stuckArmed && !dirtySince && now - Math.max(lastActive, lastSnapAt) > STUCK_MS) { stuckArmed = false; lastSnapAt = now; snap("stuck?"); }
     if (changed !== null && changed < STABLE_AT && !dirtySince) writing = false;
     setStatus();
   }
   setInterval(gateTick, GATE_MS);
 
-  async function snap(reason) {
+  function grabBlob() {
     const v = el("video");
-    if (!v.videoWidth) return;
+    if (!v.videoWidth) return Promise.resolve(null);
     const c = document.createElement("canvas");
     c.width = v.videoWidth; c.height = v.videoHeight;
     c.getContext("2d").drawImage(v, 0, 0);
+    return new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
+  }
+
+  // "strong" writing clarity, zero-dep: flatten uneven lighting (subtract a
+  // box-blurred background — shading cancels, so the stretch amplifies ink,
+  // not shadows), percentile-stretch, gamma mid-grays toward black, light
+  // sharpen. Grayscale out. Mirrors the server's Pillow pass.
+  function boxBlur(src, w, h, r, passes) {
+    let a = Float32Array.from(src), b = new Float32Array(a.length);
+    for (let p = 0; p < passes; p++) {
+      for (let y = 0; y < h; y++) {            // horizontal
+        const o = y * w;
+        let sum = 0;
+        for (let x = -r; x <= r; x++) sum += a[o + Math.min(w - 1, Math.max(0, x))];
+        for (let x = 0; x < w; x++) {
+          b[o + x] = sum / (2 * r + 1);
+          sum += a[o + Math.min(w - 1, x + r + 1)] - a[o + Math.max(0, x - r)];
+        }
+      }
+      for (let x = 0; x < w; x++) {            // vertical
+        let sum = 0;
+        for (let y = -r; y <= r; y++) sum += b[Math.min(h - 1, Math.max(0, y)) * w + x];
+        for (let y = 0; y < h; y++) {
+          a[y * w + x] = sum / (2 * r + 1);
+          sum += b[Math.min(h - 1, y + r + 1) * w + x] - b[Math.max(0, y - r) * w + x];
+        }
+      }
+    }
+    return a;
+  }
+
+  function clarifyStrong(ctx, w, h) {
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, n = w * h;
+    const lum = new Float32Array(n);
+    for (let i = 0; i < n; i++) lum[i] = (d[i * 4] + 2 * d[i * 4 + 1] + d[i * 4 + 2]) / 4;
+    const bg = boxBlur(lum, w, h, Math.max(10, Math.round(w / 48)), 2);
+    const flat = new Float32Array(n);
+    for (let i = 0; i < n; i++)
+      flat[i] = Math.min(255, Math.max(0, lum[i] - bg[i] + 215));
+    const hist = new Uint32Array(256);                 // stretch (1% low, 8% high
+    for (let i = 0; i < n; i++) hist[flat[i] | 0]++;   // — border glow) + gamma LUT
+    const clip = n / 100;
+    let lo = 0, acc = 0;
+    for (; lo < 255 && acc + hist[lo] < clip; lo++) acc += hist[lo];
+    let hi = 255; acc = 0;
+    for (; hi > 0 && acc + hist[hi] < clip * 8; hi--) acc += hist[hi];
+    if (hi - lo < 10) return false;                    // degenerate frame: leave it
+    const lut = new Float32Array(256);
+    for (let v = 0; v < 256; v++) {
+      const s = Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
+      lut[v] = Math.pow(s, 1.6) * 255;
+    }
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = lut[flat[i] | 0];
+    const soft = boxBlur(out, w, h, 1, 1);             // mild unsharp (r1, 60%)
+    for (let i = 0; i < n; i++) {
+      const v = Math.min(255, Math.max(0, out[i] + 0.6 * (out[i] - soft[i])));
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
+  // The adaptive clarity gate (measured, report 18): p95−p5 luminance spread
+  // below 100 marks a dim/flat frame that gets the waterfill pass; everything
+  // else gets the auto stretch. The gate decision travels as the enh tag.
+  const GATE_SPREAD = 100;
+  function lumSpread(ctx, w, h) {
+    const d = ctx.getImageData(0, 0, w, h).data;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4)
+      hist[(d[i] + 2 * d[i + 1] + d[i + 2]) >> 2]++;
+    const n = (w * h);
+    let lo = 0, acc = 0;
+    for (; lo < 255 && acc + hist[lo] < n * 0.05; lo++) acc += hist[lo];
+    let hi = 255; acc = 0;
+    for (; hi > 0 && acc + hist[hi] < n * 0.05; hi--) acc += hist[hi];
+    return hi - lo;
+  }
+
+  // Water-filling illumination flattening (ACCV 2018), mirroring the server's
+  // Pillow/numpy pass: the shading surface is the converged water level of a
+  // 4-neighbor diffusion over the 5×-downscaled luminance terrain (eta 0.2,
+  // decaying rain 0.01); reconstruct 0.85·g/bg. Grayscale out, continuous
+  // tones — NEVER thresholded (binarization breaks faint strokes).
+  function waterfillCanvas(ctx, w, h) {
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, n = w * h;
+    const g = new Float32Array(n);
+    for (let i = 0; i < n; i++) g[i] = (d[i * 4] + 2 * d[i * 4 + 1] + d[i * 4 + 2]) / 1020;
+    const sw = Math.max(2, Math.floor(w / 5)), sh = Math.max(2, Math.floor(h / 5));
+    const terrain = new Float32Array(sw * sh), cnt = new Float32Array(sw * sh);
+    for (let y = 0; y < h; y++) {                 // box-average downscale
+      const sy = Math.min(sh - 1, Math.floor(y * sh / h));
+      for (let x = 0; x < w; x++) {
+        const si = sy * sw + Math.min(sw - 1, Math.floor(x * sw / w));
+        terrain[si] += g[y * w + x]; cnt[si]++;
+      }
+    }
+    for (let i = 0; i < terrain.length; i++) terrain[i] /= cnt[i] || 1;
+    let wl = Float32Array.from(terrain), nx = new Float32Array(wl.length);
+    for (let t = 0; t < 300; t++) {               // diffusion + decaying rain
+      const rain = 0.01 * Math.exp(-t / 50);
+      for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+        const i = y * sw + x;
+        const up = wl[(y > 0 ? y - 1 : 0) * sw + x], dn = wl[(y < sh - 1 ? y + 1 : sh - 1) * sw + x];
+        const lf = wl[y * sw + (x > 0 ? x - 1 : 0)], rt = wl[y * sw + (x < sw - 1 ? x + 1 : sw - 1)];
+        const v = wl[i] + 0.2 * (up + dn + lf + rt - 4 * wl[i]) + rain;
+        nx[i] = v > terrain[i] ? v : terrain[i];  // water never below ground
+      }
+      [wl, nx] = [nx, wl];
+    }
+    for (let y = 0; y < h; y++) {                 // bilinear-ish upsample + reconstruct
+      const fy = Math.min(sh - 1.001, y * sh / h), y0 = Math.floor(fy), ty = fy - y0;
+      for (let x = 0; x < w; x++) {
+        const fx = Math.min(sw - 1.001, x * sw / w), x0 = Math.floor(fx), tx = fx - x0;
+        const bg = wl[y0 * sw + x0] * (1 - tx) * (1 - ty) + wl[y0 * sw + x0 + 1] * tx * (1 - ty)
+                 + wl[(y0 + 1) * sw + x0] * (1 - tx) * ty + wl[(y0 + 1) * sw + x0 + 1] * tx * ty;
+        const v = Math.min(255, Math.max(0, 0.85 * g[y * w + x] / Math.max(bg, 0.001) * 255));
+        const i = (y * w + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
+  // "auto": histogram stretch on the snap canvas — find the 0.5% / 99.5%
+  // luminance percentiles and map them to 0..255. A near-no-op on a
+  // well-lit page, a real lift on faint pencil.
+  function stretchContrast(ctx, w, h) {
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4)
+      hist[(d[i] + 2 * d[i + 1] + d[i + 2]) >> 2]++;
+    const clip = (w * h) / 200;                      // 0.5% at each end
+    let lo = 0, acc = 0;
+    for (; lo < 255 && acc + hist[lo] < clip; lo++) acc += hist[lo];
+    let hi = 255; acc = 0;
+    for (; hi > 0 && acc + hist[hi] < clip; hi--) acc += hist[hi];
+    if (hi - lo < 10 || hi - lo > 235) return false; // degenerate, or already full range
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / (hi - lo);
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = lut[d[i]]; d[i + 1] = lut[d[i + 1]]; d[i + 2] = lut[d[i + 2]];
+    }
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
+  async function snap(reason, storeOnly) {
+    if (checksPaused && !storeOnly && reason !== "asked" && reason !== "next") return null;
+    const v = el("video");
+    if (!v.videoWidth) return null;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(v, 0, 0);
+    let enh = "0";
+    if (contrastMode === "strong" && clarifyStrong(ctx, c.width, c.height)) enh = "strong";
+    else if (contrastMode === "auto") {           // the adaptive clarity gate
+      if (lumSpread(ctx, c.width, c.height) < GATE_SPREAD
+          && waterfillCanvas(ctx, c.width, c.height)) enh = "waterfill";
+      else if (stretchContrast(ctx, c.width, c.height)) enh = "auto";
+    }
     const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
-    const resp = await fetch("/snap?reason=" + encodeURIComponent(reason), { method: "POST", body: blob }).catch(() => null);
-    if (!resp?.ok) return;
+    if (!blob) return null;
+    const url = "/snap?reason=" + encodeURIComponent(reason) +
+                "&enh=" + enh + (storeOnly ? "&store=1" : "");
+    const resp = await fetch(url, { method: "POST", body: blob }).catch(() => null);
+    if (!resp?.ok) return null;
     const { id } = await resp.json();
+    if (storeOnly) return id;
     pending.push({ id, reason, at: Date.now() });
     if (session) session.snaps.push(id);
     if (reason === "asked") manualPending = true;
     snapMoment(id);
-    renderFeed(lastChecks);
+    renderDialogue();
+    return id;
   }
 
   function snapMoment(id) {
     if (reduceMotion) return;
     const ring = el("snapring");
     ring.classList.remove("fire"); void ring.offsetWidth; ring.classList.add("fire");
-    const v = el("video").getBoundingClientRect();
-    const feed = el("feed").getBoundingClientRect();
+    const v = el("framewrap").getBoundingClientRect();
+    const map = el("rmap").getBoundingClientRect();
     const f = document.createElement("img");
     f.className = "flier";
     f.src = "/snap/" + id;
     Object.assign(f.style, { left: v.left + "px", top: v.top + "px", width: v.width + "px", height: v.height + "px" });
     document.body.appendChild(f);
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      Object.assign(f.style, { left: feed.left + "px", top: (feed.top + window.scrollY - window.scrollY) + "px", width: "75px", height: "56px", opacity: 0.4 });
+      Object.assign(f.style, { left: map.left + "px", top: map.top + "px", width: "60px", height: "76px", opacity: 0.4 });
     }));
     setTimeout(() => f.remove(), 450);
   }
 
-  // ---------- deskview live stream ----------
-  let streamFailed = false;
-  let streamImg = null;
-  function startStream() {
-    if (streamImg) streamImg.remove();
-    const img = streamImg = document.createElement("img");
-    img.className = "replay under";
-    img.alt = "Live Desk View of the page";
-    img.src = "/stream";
-    img.onerror = () => {         // stream unavailable: fall back to ~1/s frame polling
-      img.remove();
-      if (streamImg === img) streamImg = null;
-      streamFailed = true;
-      lastFrameN = -1;
-    };
-    el("framewrap").prepend(img);
+  // ---------- deskview live view ----------
+  // Poll /live.jpg at ~6 fps with an offscreen loader (no flicker: the view
+  // img swaps to the cached frame on load). The old MJPEG <img src=/stream>
+  // rendered a permanent black box in Chromium WITHOUT firing onerror, so
+  // the fallback never ran — that was "where is the camera feature?".
+  let livePolling = false;
+  function startLivePoll() {
+    if (livePolling) return;
+    livePolling = true;
+    const view = document.createElement("img");
+    view.className = "replay under";
+    view.alt = "Live Desk View of the page";
+    el("framewrap").prepend(view);
+    const loader = new Image();
+    let waiting = false;
+    setInterval(() => {
+      if (waiting || paused) return;
+      waiting = true;
+      loader.onload = () => {
+        view.src = loader.src;
+        el("camwait").hidden = true;
+        waiting = false;
+      };
+      loader.onerror = () => { waiting = false; };   // no frame yet: retry
+      loader.src = "/live.jpg?n=" + Date.now();
+    }, 160);
   }
 
   // The Desk View camera comes and goes with the iPhone (unlocked, picked up,
   // wandered off). deskcap waits and reattaches; the page just says so and
   // brings the picture back when frames resume.
-  const DESKVIEW_CAPTION = "Live from the Desk View camera. Only the snapshots on the right are read by Claude.";
+  const DESKVIEW_CAPTION = "Live from the Desk View camera — frame your page here.";
   let camWaiting = false;
   let camRefresh = false;
   function showCamWaiting(msg) {
     if (!camWaiting) sessionEvent("camera_lost");
     camWaiting = true;
-    if (streamImg) streamImg.hidden = true;
     const lost = /^lost/.test(msg || "");
     showOffline([lost ? "The Desk View camera dropped out." : "Waiting for the Desk View camera.",
       "Lock your iPhone and set it back on the lid, rear cameras facing you — Cono picks " +
-      "up again by itself, or hit Reconnect to look for it now. Black picture? See the iPhone tips under the video. " +
-      "(No iPhone handy? Restart as `cono-check browser`.)"],
+      "up again by itself, or hit Reconnect to look for it now. Black picture? See the iPhone tips under the camera view. " +
+      "(No iPhone handy? Restart as `cono browser`.)"],
       resumeDeskView, "Reconnect");
     el("caption").textContent = "";
   }
@@ -659,8 +1144,6 @@
     camRefresh = false;
     el("offline").style.display = "none";
     el("caption").textContent = DESKVIEW_CAPTION;
-    if (streamFailed || !streamImg) { streamFailed = false; startStream(); }
-    else streamImg.hidden = false;
   }
 
   // ---------- replay mode stage ----------
@@ -685,14 +1168,108 @@
     };
   }
 
-  // ---------- notes column ----------
-  let lastChecks = [];
-  let lastWorking = "";
+  // ---------- chem/math typesetting ----------
+  // chemHTML: escape, then typeset chemistry wherever it appears — H2O/C3H8
+  // style formula tokens (digit after a letter inside a formula-looking word
+  // becomes a subscript; leading coefficients stay), explicit _sub / ^sup
+  // notation (braces for longer scripts), and reaction arrows. Anything it
+  // can't recognize passes through as plain escaped text — never dropped.
+  function chemHTML(s) {
+    let h = esc(s);
+    // bare formula tokens: ≥2 element groups (H2O, NO3-, BaSO4), a coefficient
+    // + single element (4O2), or a common diatomic (O2, Cl2). L5-style line
+    // refs never match — they have one letter and no coefficient.
+    h = h.replace(/\b[0-9]*(?:[A-Z][a-z]?[0-9]*){2,}(?:[+\-](?![A-Za-z0-9]))?\b/g,
+      tok => tok.replace(/([A-Za-z])([0-9]+)/g, "$1<sub>$2</sub>"))
+         .replace(/\b([0-9]+[A-Z][a-z]?)([0-9]+)\b/g, "$1<sub>$2</sub>")
+         .replace(/\b(H|N|O|F|Cl|Br|I)([0-9])\b/g, "$1<sub>$2</sub>");
+    h = h.replace(/_\{([^}]+)\}/g, "<sub>$1</sub>")
+         .replace(/_([0-9]+|[A-Za-z]{1,3}(?![A-Za-z]))/g, "<sub>$1</sub>")
+         .replace(/\^\{([^}]+)\}/g, "<sup>$1</sup>")
+         .replace(/\^([0-9]*[+\-]|[0-9]+)/g, "<sup>$1</sup>")
+         .replace(/&lt;=&gt;/g, '<span class="arrow">⇌</span>')
+         .replace(/-&gt;/g, '<span class="arrow">→</span>');
+    return h;
+  }
+
+  // eqHTML: equations panel additionally lights up the ? unknowns
+  function eqHTML(s) {
+    return chemHTML(s).replace(/\?/g, '<span class="unk">?</span>');
+  }
+
+  // ---------- the twin ----------
+  function renderTwin(s) {
+    const t = s.twin || {};
+    const sig = JSON.stringify([t.problem, t.pinned, t.equations, t.on_page]);
+    if (sig === renderTwin.sig) { renderMap(t); return; }   // keep .anchored alive
+    renderTwin.sig = sig;
+    const p = t.problem;
+    if (p && p.label) {
+      el("problabel").textContent = p.label + (t.pinned === p.label ? " ⦿" : "");
+      el("problabel").title = t.pinned === p.label
+        ? "You advanced here with Next — the card stays until your writing moves on" : "";
+      el("probq").innerHTML = chemHTML(p.question || "");
+      el("probq").classList.remove("placeholder");
+      el("probq").title = "Click to ask about this problem";
+      el("probq").onclick = () => setAnchor({ kind: "problem",
+        text: p.label + " | " + (p.question || ""), tag: "problem " + p.label }, el("probq"));
+      el("probprog").innerHTML = chemHTML(p.progress || "");
+      el("nextbtn").hidden = false;
+    }
+    if (t.equations && t.equations.length) {
+      el("equations").hidden = false;
+      el("eqlist").innerHTML = t.equations.map((e, i) =>
+        `<div class="eq" data-i="${i}" title="Click to ask about this relation"><span>${eqHTML(e.eq)}</span>${e.name ? `<span class="eqname">${esc(e.name)}</span>` : ""}</div>`).join("");
+      el("eqlist").querySelectorAll(".eq").forEach(div =>
+        div.addEventListener("click", () => {
+          const e = t.equations[+div.dataset.i];
+          setAnchor({ kind: "equation", text: e.eq + (e.name ? " :: " + e.name : ""),
+                      tag: "this relation" }, div);
+        }));
+    }
+    const lines = (t.on_page || "").split("\n").map(l => l.trim()).filter(Boolean);
+    el("onpagebox").hidden = !lines.length;
+    if (lines.length) {
+      el("onpagelines").innerHTML = lines.map((l, i) =>
+        `<div class="onpline" data-i="${i}" title="Click to ask about this line">${chemHTML(l)}</div>`).join("");
+      el("onpagelines").querySelectorAll(".onpline").forEach(div =>
+        div.addEventListener("click", () => {
+          const l = lines[+div.dataset.i];
+          const m = l.match(/^L\d+/);
+          setAnchor({ kind: "line", text: l, tag: m ? m[0] : l.slice(0, 16) + "…" }, div);
+        }));
+    }
+    renderMap(t);
+  }
+
+  function renderMap(t) {
+    const grid = t.grid || [];
+    if (!grid.length) return;
+    const msig = JSON.stringify([grid, t.grid_time]);
+    if (msig === renderMap.sig) return;
+    renderMap.sig = msig;
+    const rmap = el("rmap");
+    const cols = Math.max(...grid.map(r => r.length));
+    rmap.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    rmap.innerHTML = grid.map((row, r) =>
+      row.split("").map((d, c) =>
+        `<button type="button" class="cell r${d}" data-x="${(c + 0.5) / cols}" data-y="${(r + 0.5) / grid.length}"
+          aria-label="${d === "2" ? "readable" : d === "1" ? "unreadable" : "blank"} region, click to ask about it"></button>`
+      ).join("")).join("");
+    el("maptime").textContent = t.grid_time ? "as of " + t.grid_time : "";
+    rmap.querySelectorAll(".cell").forEach(b =>
+      b.addEventListener("click", () => {
+        const x = +b.dataset.x, y = +b.dataset.y;
+        const col = ["left", "middle", "right"][Math.min(Math.floor(x * 3), 2)];
+        const row = ["top", "center", "bottom"][Math.min(Math.floor(y * 3), 2)];
+        setAnchor({ kind: "region", x, y,
+                    tag: row === "center" && col === "middle" ? "center" : row + " " + col }, b);
+      }));
+  }
 
   function renderRibbon(checks) {
     const latest = checks[0];
     if (!latest || latest.visibility == null && !latest.working_on) return;
-    el("ribbon").hidden = false;
     const v = latest.visibility;
     const chip = el("camchip");
     if (v != null) {
@@ -701,62 +1278,217 @@
     }
     if (latest.snap) chip.href = "/snap/" + latest.snap;
     const w = latest.working_on || "";
-    if (latest.kind === "idle" || /^nothing new/i.test(w)) {
-      if (lastWorking) el("workingon").textContent = "still on: " + lastWorking;
-    } else if (w) {
-      lastWorking = w.toLowerCase();
-      el("workingon").textContent = "working on: " + lastWorking;
-    }
+    if (w && latest.kind !== "idle" && !/^nothing new/i.test(w))
+      el("workingon").innerHTML = chemHTML(w.toLowerCase());
     const note = (latest.visibility_note || "").split(/(?<=\.)\s/)[0];
     el("reframe").hidden = !(note && (latest.kind === "setup" || (v != null && v <= 4)));
     if (!el("reframe").hidden) el("reframe").textContent = "Reframe: " + note;
   }
-  function quietHTML(c) {
-    const txt = c.kind === "setup"
-      ? (c.check || c.visibility_note || "Fix the framing — see the camera chip.")
-      : (c.check && !/^nothing new/i.test(c.check) ? c.check
-         : "nothing new" + (lastWorking ? " — still on " + lastWorking : ""));
-    return `<div class="pendingline">${esc(c.time)} · ${esc(txt.slice(0, 160))}</div>`;
+
+  // ---------- the dialogue ----------
+  function msgHTML(m, isLast) {
+    if (m.who === "you")
+      return `<div class="msg you">${chemHTML(m.text)}</div>`;
+    const thumb = m.snap && m.kind !== "chat"
+      ? `<a href="/snap/${esc(m.snap)}" target="_blank" rel="noopener"><img class="mthumb" loading="lazy" decoding="async" src="/snap/${esc(m.snap)}" alt="snapshot read"></a>` : "";
+    return `<div class="msg cono ${esc(m.kind || "")}">
+      <span class="mtext">${chemHTML(m.text)}</span><span class="mtime">${esc(m.time || "")}</span>${thumb}${rateHTML(m)}
+      ${isLast ? `<div><button type="button" class="morebtn" id="explainmore">explain more</button></div>` : ""}
+    </div>`;
   }
-  function checkHTML(c) {
-    if (c.kind === "idle" || c.kind === "setup") return quietHTML(c);
-    const parts = (c.check || "").split(/(?<=[.?])\s+/);
-    const say = parts.slice(0, 2).join(" ");
-    const more = parts.slice(2).join(" ");
-    const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img src="/snap/${esc(c.snap)}" alt="The snapshot Claude read"></a>` : "";
-    return `<article class="check ${c.kind === "confirm" ? "confirm" : "fix"}">
-      <p class="say">${esc(say)}</p>
-      <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}</span>
-        <details class="read"><summary>what I read</summary>
-          <div class="onpage">${esc(c.on_page || "(nothing)")}</div>
-          ${more ? `<p class="more">${esc(more)}</p>` : ""}
-        </details></div>
-      ${c.failed ? `<p class="more">Couldn't finish — <button class="retry" data-snap="${esc(c.snap)}">Retry</button></p>` : ""}
-    </article>`;
+
+  // dev mode: every note and reply carries its own rating, saved the moment
+  // it's clicked (run log always, session bundle when recording). Both of
+  // 2026-10-29's runs lost their ratings: End & rate was the only way in,
+  // and pressing it ended the recording 46 s and 7 min into the runs.
+  function rateHTML(m) {
+    if (m.id == null) return "";
+    const r = (lastState?.ratings || {})[m.id] || {};
+    const b = (v, label) => `<button type="button" data-rate="${m.id}" data-v="${v}" class="${r.verdict === v ? "on" : ""}">${label}</button>`;
+    const w = (k, label) => `<button type="button" data-rate="${m.id}" data-v="wrong" data-w="${k}" class="${r.wrong_kind === k ? "on" : ""}">${label}</button>`;
+    return `<span class="rate">${b("helped", "helped")}${b("didnt", "didn’t help")}${b("wrong", "wrong")}` +
+           (r.verdict === "wrong" ? w("misread", "misread page") + w("advice", "advice wrong") : "") + `</span>`;
   }
-  function pendingHTML(p) {
-    const s = Math.round((Date.now() - p.at) / 1000);
-    const label = s > 60 ? "Still reading — slow check, the note will land here."
-      : `Reading this snapshot… ${s}s${s > 30 ? " — long one, still going" : ""}`;
-    return `<div class="pendingline"><img src="/snap/${esc(p.id)}" alt="">
-      <span><span class="lampdot checking"></span>${label}</span></div>`;
+
+  async function rate(id, verdict, wrongKind) {
+    const cur = (lastState?.ratings || {})[id] || {};
+    if (!wrongKind && cur.verdict === verdict) verdict = "";   // click again to clear
+    const r = await fetch("/rate", { method: "POST",
+      body: JSON.stringify({ id, verdict, wrong_kind: wrongKind || "" }) }).catch(() => null);
+    if (r?.ok && lastState) {
+      lastState.ratings = { ...(lastState.ratings || {}), [id]: await r.json() };
+      renderDialogue();
+    }
   }
-  function renderFeed(checks) {
-    lastChecks = checks;
-    renderRibbon(checks);
-    const done = new Set(checks.map(c => c.snap));
+
+  function renderDialogue() {
+    const s = lastState;
+    if (!s) return;
+    const thread = s.thread || [];
+    const done = new Set((s.checks || []).map(c => c.snap));
     pending = pending.filter(p => !done.has(p.id));
     if (!pending.length) manualPending = false;
-    if (!checks.length && !pending.length) return;
-    const recent = checks.slice(0, 5);          // cards + quiet one-liners, in order
-    const older = checks.slice(5).filter(c => c.kind !== "idle" && c.kind !== "setup");
-    const items = pending.map(pendingHTML).join("") + recent.map(checkHTML).join("");
-    el("feed").innerHTML = items + (older.length
-      ? `<details class="older"><summary>${older.length} earlier ${older.length === 1 ? "note" : "notes"}</summary>${older.map(checkHTML).join("")}</details>`
-      : "");
-    el("feed").querySelectorAll(".retry").forEach(b =>
+    let html = "";
+    const lastCono = [...thread].reverse().find(m => m.who === "cono");
+    thread.forEach(m => { html += msgHTML(m, !live.size && !chatWaiting && m === lastCono); });
+    // each stream renders in its own slot, in the order it started; a check
+    // that is narrating "nothing new" or framing streams into the quiet line
+    // instead (it was never going to become a note, so it must not appear
+    // as one and then vanish)
+    let quietLive = null, checkReading = false;
+    for (const [, v] of live) {
+      if (v.kind === "check" && v.quiet) { if (v.text) quietLive = v.text; continue; }
+      if (v.text) html += `<div class="msg cono live"><span class="mtext">${chemHTML(v.text)}</span></div>`;
+      else if (v.kind === "check") checkReading = true;
+    }
+    const chatStreaming = [...live.values()].some(v => v.kind === "chat");
+    if (checkReading && !pending.length)
+      html += `<div class="pendingline"><span class="lampdot checking"></span>reading your page…</div>`;
+    if (chatWaiting && !chatStreaming)
+      html += `<div class="pendingline"><span class="lampdot checking"></span>reading…</div>`;
+    const anyCheck = [...live.values()].some(v => v.kind === "check");
+    pending.forEach(p => {
+      if (anyCheck) return;             // streaming text already shows progress
+      const sec = Math.round((Date.now() - p.at) / 1000);
+      html += `<div class="pendingline"><img src="/snap/${esc(p.id)}" alt="">
+        <span><span class="lampdot checking"></span>reading your page… ${sec}s</span></div>`;
+    });
+    // a DOM rebuild mid-click eats the click (the "pressed it twice" retries
+    // in the pointing logs) and re-decodes every thumbnail — skip identical
+    // renders entirely
+    if (html && html !== renderDialogue.last) {
+      renderDialogue.last = html;
+      el("dialogue").innerHTML = html;
+      const more = el("explainmore");
+      if (more) more.addEventListener("click", explainMore);
+      el("dialogue").querySelectorAll("[data-rate]").forEach(b =>
+        b.addEventListener("click", () => rate(+b.dataset.rate, b.dataset.v, b.dataset.w)));
+      el("dialogue").scrollTop = el("dialogue").scrollHeight;
+    }
+    // the latest quiet acknowledgment (idle/setup) lives under the dialogue
+    const quiet = (s.checks || []).find(c => !c.failed);
+    el("quietline").classList.toggle("live", !!quietLive);
+    if (quietLive) {
+      el("quietline").hidden = false;
+      el("quietline").innerHTML = chemHTML(quietLive.slice(0, 160));
+    } else if (quiet && quiet.suppressed === "misfire" && quiet === (s.checks || [])[0]) {
+      el("quietline").hidden = true;    // a misfired claim shows nothing at all
+    } else if (quiet && (quiet.kind === "idle" || quiet.kind === "setup")
+        && quiet === (s.checks || [])[0]) {
+      const txt = quiet.kind === "setup"
+        ? (quiet.check || quiet.visibility_note || "Fix the framing — see the readability map.")
+        : (quiet.check && !/^nothing new/i.test(quiet.check) ? quiet.check : "nothing new on the page");
+      el("quietline").hidden = false;
+      el("quietline").innerHTML = esc(quiet.time) + " · " + chemHTML(txt.slice(0, 160));
+    } else if (quiet === (s.checks || [])[0]) {
+      el("quietline").hidden = true;
+    }
+  }
+
+  // ---------- history (earlier notes) ----------
+  function histHTML(c) {
+    if (c.kind === "idle" || c.kind === "setup")
+      return `<div class="hist"><div class="meta"><span>${esc(c.time)} · ${esc((c.check || c.visibility_note || "").slice(0, 120))}${devMode && c.suppressed ? " · suppressed: " + esc(c.suppressed) : ""}</span></div></div>`;
+    const thumb = c.snap ? `<a href="/snap/${esc(c.snap)}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="/snap/${esc(c.snap)}" alt="snapshot"></a>` : "";
+    return `<div class="hist ${esc(c.kind || "")}">
+      <div class="meta">${thumb}<span>${esc(c.time)}${c.reason === "asked" ? " · you asked" : ""}${c.problem_label ? " · " + esc(c.problem_label) : ""}${devMode && c.ms ? " · " + (c.ms / 1000).toFixed(1) + "s" : ""}${devMode && c.contrast ? " · " + esc(c.contrast) : ""}</span></div>
+      <p class="say">${chemHTML(c.check || "")}</p>
+      <details class="read"><summary>what I read</summary><div class="onpage">${chemHTML(c.on_page || "(nothing)")}</div></details>
+      ${c.failed ? `<p><button class="retry" data-snap="${esc(c.snap)}">Retry</button></p>` : ""}
+    </div>`;
+  }
+
+  function renderHistory(checks) {
+    if (!checks.length) return;
+    el("historybox").hidden = false;
+    el("historysum").textContent = `earlier notes (${checks.length})`;
+    const html = checks.map(histHTML).join("");
+    if (html === renderHistory.last) return;   // identical: keep the DOM (and its decoded images)
+    renderHistory.last = html;
+    el("history").innerHTML = html;
+    el("history").querySelectorAll(".retry").forEach(b =>
       b.addEventListener("click", () => fetch("/retry?snap=" + encodeURIComponent(b.dataset.snap), { method: "POST" })));
   }
+
+  // ---------- pointing: the twin is the pointing surface ----------
+  // Click a transcribed line, a relation, the problem card, or a readability
+  // cell; the anchor carries that element's own text (or page region) so the
+  // question is about the thing, not raw camera coordinates.
+  function setAnchor(a, elem) {
+    anchor = a;
+    el("anchortag").hidden = false;
+    el("anchortag").textContent = `⌖ ${a.tag} ×`;
+    document.querySelectorAll(".anchored").forEach(d => d.classList.remove("anchored"));
+    if (elem) elem.classList.add("anchored");
+    el("chatbox").placeholder = "What about this? (Enter to just ask that)";
+    el("chatbox").focus();
+    // one tap for the obvious ask about the pointed thing (suggestion
+    // 2026-10-29: clicking a relation named "definition" seemed to do
+    // nothing — "give an option to define")
+    const act = ANCHOR_ACTIONS[a.kind];
+    el("anchoract").hidden = !act;
+    if (act) el("anchoract").textContent = act[0];
+    sessionEvent("pen_point", { anchor: a });
+  }
+  const ANCHOR_ACTIONS = {
+    equation: ["Define & explain", "Define this and explain it: what it says and what each symbol means."],
+    line:     ["Check this line", "Is this line right?"],
+    problem:  ["What is it asking?", "What is this problem asking me to do?"],
+    region:   ["What’s written here?", "What is written here?"],
+  };
+  el("anchoract").addEventListener("click", () => {
+    const act = anchor && ANCHOR_ACTIONS[anchor.kind];
+    if (!act) return;
+    el("chatbox").value = "";
+    sendChat(act[1]);
+  });
+  // page-level asks: a full-resolution read of the whole sheet
+  el("quickrow").querySelectorAll("[data-intent]").forEach(b =>
+    b.addEventListener("click", () => {
+      sessionEvent("quick_ask", { intent: b.dataset.intent });
+      sendChat("", b.dataset.intent);
+    }));
+
+  function clearAnchor() {
+    anchor = null;
+    el("anchortag").hidden = true;
+    el("anchoract").hidden = true;
+    el("chatbox").placeholder = "Ask — or click a line or relation above to point at it";
+    document.querySelectorAll(".anchored").forEach(d => d.classList.remove("anchored"));
+  }
+  el("anchortag").addEventListener("click", clearAnchor);
+
+  // ---------- chat ----------
+  async function sendChat(text, intent) {
+    chatWaiting = true;
+    renderDialogue();
+    if (mode === "live") await snap("chat", true);   // freshen the page image first
+    const body = { text, anchor, intent };
+    clearAnchor();
+    const r = await fetch("/chat", { method: "POST", body: JSON.stringify(body) }).catch(() => null);
+    if (!r?.ok) { chatWaiting = false; renderDialogue(); }
+    poll.soon();
+  }
+
+  el("askform").addEventListener("submit", e => {
+    e.preventDefault();
+    const text = el("chatbox").value.trim();
+    if (!text && !anchor) return;
+    el("chatbox").value = "";
+    sendChat(text);
+  });
+
+  function explainMore() {
+    sessionEvent("explain_more");
+    sendChat("Explain that more, please.");
+  }
+
+  el("nextbtn").addEventListener("click", async () => {
+    el("nextbtn").disabled = true;
+    setTimeout(() => { el("nextbtn").disabled = false; }, 4000);
+    await fetch("/next", { method: "POST" }).catch(() => null);
+    if (mode === "live") snap("next");
+  });
 
   el("checknow").addEventListener("click", () => {
     if (mode === "live") snap("asked");
@@ -764,92 +1496,271 @@
     sessionEvent("check_now");
   });
 
-  // ---------- 10-minute recorded session ----------
-  const SESSION_S = 600, DENSE_MS = 3000;
-  let session = null;   // {start, left, timers:[], signal:[], snaps:[], paused}
+  el("contrastbtn").addEventListener("click", async () => {
+    const next = { auto: "strong", strong: "off", off: "auto" }[contrastMode] || "auto";
+    await fetch("/contrast", { method: "POST", body: JSON.stringify({ mode: next }) }).catch(() => null);
+    poll.soon();
+  });
 
-  function sessionEvent(type, extra = {}) {
-    if (session) fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) });
+  function renderContrast(s) {
+    contrastMode = ["off", "auto", "strong"].includes(s.contrast) ? s.contrast : "auto";
+    const b = el("contrastbtn");
+    b.hidden = !mode || !devMode;       // study mode: automatic defaults, no knob
+    b.textContent = "writing clarity: " + contrastMode +
+      (mode !== "live" && contrastMode !== "off" && !s.pillow
+        ? " (needs Pillow here — pip install pillow)" : "");
+    el("stagebtn").hidden = !mode || !devMode;
   }
 
-  function grabJpeg() {
-    const v = el("video");
-    if (!v.videoWidth) return Promise.resolve(null);
-    const c = document.createElement("canvas");
-    c.width = v.videoWidth; c.height = v.videoHeight;
-    c.getContext("2d").drawImage(v, 0, 0);
-    return new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
+  // ---------- twin <-> ambient face: display only, same plumbing + logging
+  let viewFace = "twin";
+  function renderView(s) {
+    viewFace = s.view === "ambient" ? "ambient" : "twin";
+    document.body.classList.toggle("view-ambient", viewFace === "ambient");
+    el("viewtoggle").hidden = !mode;
+    el("viewtoggle").querySelectorAll(".vt").forEach(b =>
+      b.classList.toggle("on", b.dataset.view === viewFace));
+  }
+  el("viewtoggle").querySelectorAll(".vt").forEach(b =>
+    b.addEventListener("click", async () => {
+      const v = b.dataset.view;
+      if (v === viewFace) return;
+      localStorage.setItem("cono-view", v);
+      await fetch("/view", { method: "POST", body: JSON.stringify({ view: v }) }).catch(() => null);
+      poll.soon();
+    }));
+
+  // ---------- study <-> dev mode: changes what's shown, never what's logged
+  function renderDev(s) {
+    devMode = !!s.dev;
+    document.body.classList.toggle("dev", devMode);
+    const b = el("devbtn");
+    b.hidden = !mode;
+    b.textContent = devMode ? "dev ✓" : "dev";
+    el("rec").title = devMode && s.session_path ? s.session_path : "";
+  }
+  el("devbtn").addEventListener("click", async () => {
+    await fetch("/dev", { method: "POST", body: JSON.stringify({ on: !devMode }) }).catch(() => null);
+    poll.soon();
+  });
+
+  // ---------- improvement suggestions: captured with context, both modes ----
+  el("suggestform").addEventListener("submit", async e => {
+    e.preventDefault();
+    const text = el("suggestinput").value.trim();
+    if (!text) return;
+    el("suggestinput").value = "";
+    const r = await fetch("/suggest", { method: "POST", body: JSON.stringify({ text }) }).catch(() => null);
+    const saved = r?.ok ? ((await r.json()).saved || []) : [];
+    const d = document.createElement("div");
+    const t = new Date().toTimeString().slice(0, 5);
+    d.innerHTML = (r?.ok ? '<span class="ok">✓ saved</span> ' : "✗ not saved — is cono still running? ") + esc(t + " — " + text) +
+      (devMode && saved.length ? `<br><span class="savedto">${saved.map(x => esc(x.replace(/^.*\/deskcap\//, "~/deskcap/"))).join(" · ")}</span>` : "");
+    el("suggestlog").prepend(d);
+  });
+
+  // ---------- check-stage trace (test feature): where does the time go? ----
+  // Every chip is a real pipeline event pushed by the server — contrast done,
+  // request sent, first streamed token, each reply section appearing — never
+  // a timer animation. The elapsed clock is the only thing that ticks.
+  const STAGE_ORDER = {
+    check: ["skipped", "contrast", "zoom", "sent", "first word", "visibility", "working on", "problem",
+            "on page", "tally", "check", "kind", "grid", "equations", "done"],
+    chat:  ["crop", "zoom", "sent", "first word", "done"],
+  };
+  const STAGE_LABEL = {
+    contrast: "contrast", sent: "sent", "first word": "model", visibility: "vis",
+    "working on": "work", problem: "prob", "on page": "page", tally: "tally",
+    check: "check", kind: "kind", grid: "grid", equations: "eqns",
+    done: "done", crop: "crop", zoom: "zoom", skipped: "no page · not sent",
+  };
+
+  function renderStages() {
+    const box = el("stagebox");
+    if (!stageTrace || !devMode) { box.hidden = true; return; }
+    let run = stageRun;
+    if (!run) {                        // page loaded between checks: show the last one
+      const last = (lastState?.checks || []).find(c => c.stages && c.stages.length);
+      if (last) run = { kind: "check", stages: last.stages, done: true, start: null };
+    }
+    if (!run) { box.hidden = true; return; }
+    box.hidden = false;
+    const byName = {};
+    run.stages.forEach(s => { byName[s.stage] = s.ms; });
+    const order = STAGE_ORDER[run.kind] || STAGE_ORDER.check;
+    const optional = ["crop", "zoom", "skipped"];  // only shown on the runs that used them
+    const chips = order.filter(n => n in byName || !optional.includes(n));
+    const lastHit = run.stages.length ? run.stages[run.stages.length - 1].stage : null;
+    el("stagestrip").innerHTML = chips.map(n => {
+      const hit = n in byName;
+      const cur = !run.done && n === lastHit;
+      return `<span class="stagechip${hit ? " hit" : ""}${cur ? " cur" : ""}">` +
+             `${esc(STAGE_LABEL[n] || n)}${hit ? " " + (byName[n] / 1000).toFixed(1) : ""}</span>`;
+    }).join("");
+    const total = byName.done != null ? byName.done : run.start ? Date.now() - run.start : null;
+    el("stagetime").textContent = total == null ? ""
+      : (run.done ? "took " : "") + (total / 1000).toFixed(1) + "s";
+  }
+  setInterval(() => { if (stageRun && !stageRun.done) renderStages(); }, 250);
+
+  el("stagebtn").addEventListener("click", () => {
+    stageTrace = !stageTrace;
+    localStorage.setItem("cono-stagetrace", stageTrace ? "on" : "off");
+    el("stagebtn").textContent = "stage trace: " + (stageTrace ? "on" : "off");
+    renderStages();
+  });
+  el("stagebtn").textContent = "stage trace: " + (stageTrace ? "on" : "off");
+
+  // ---------- SSE: streamed text ----------
+  // a finished stream keeps showing until /state carries its saved message
+  // (deleting it on "done" blanked the reply for one poll round-trip)
+  function settleLive(id) {
+    const v = live.get(id);
+    if (v) { v.done = true; v.doneAt = Date.now(); }
+  }
+  function pruneLive(s) {
+    const ids = new Set([...(s.thread || []), ...(s.checks || [])].map(m => m.id));
+    for (const [id, v] of live)
+      if (v.done && (ids.has(id) || Date.now() - v.doneAt > 3000)) live.delete(id);
   }
 
-  function showConsent() {
-    const p = el("sessionpanel");
-    p.hidden = false;
-    p.innerHTML = `<div class="panel">
-      <h2>Record a 10-minute session?</h2>
-      <p>Cono will save a photo of your page every 3 seconds for 10 minutes, plus
-      every snapshot it reads and every note it writes — all into one folder on
-      this Mac. Nothing leaves this computer except the snapshots Claude already
-      reads through your own login. You can end it early, and you can delete the
-      whole folder afterwards with one click.</p>
-      <p>Frame the camera on your page, not on yourself.</p>
-      <div class="row"><button class="pill" id="consentgo">Start recording</button>
-      <button class="quiet" id="consentno">Not now</button></div></div>`;
-    el("consentgo").onclick = startSession;
-    el("consentno").onclick = () => { p.hidden = true; };
+  function startEvents() {
+    const es = new EventSource("/events");
+    es.onmessage = m => {
+      let ev;
+      try { ev = JSON.parse(m.data); } catch { return; }
+      if (ev.type === "check_partial") {
+        // WORKING ON arrives before CHECK: "nothing new" (or an unreadable
+        // frame) means this one belongs in the quiet line, not a note bubble
+        const quiet = /^nothing new/i.test(ev.working_on || "") ||
+                      (ev.visibility != null && ev.visibility <= 3);
+        live.set(ev.id, { kind: "check", text: ev.check || "", quiet });
+        const pinned = lastState?.twin?.pinned;
+        // a pinned card never flashes back to an earlier problem mid-stream
+        if (ev.problem && ev.problem.label && (!pinned || ev.problem.label === pinned)) {
+          el("problabel").textContent = ev.problem.label + (pinned === ev.problem.label ? " ⦿" : "");
+          if (ev.problem.question) { el("probq").innerHTML = chemHTML(ev.problem.question); el("probq").classList.remove("placeholder"); }
+          el("probprog").innerHTML = chemHTML(ev.problem.progress || "");
+          el("nextbtn").hidden = false;
+        }
+        renderDialogue();
+      } else if (ev.type === "check_start") {
+        live.set(ev.id, { kind: "check", text: "", quiet: false });
+        stageRun = { kind: "check", id: ev.id, stages: [], start: Date.now(), done: false };
+        renderDialogue();
+        renderStages();
+      } else if (ev.type === "check_done") {
+        settleLive(ev.id);
+        if (stageRun && stageRun.kind === "check" && stageRun.id === ev.id) stageRun.done = true;
+        renderStages();
+        poll.soon();
+      } else if (ev.type === "chat_start") {
+        live.set(ev.id, { kind: "chat", text: "" });
+        stageRun = { kind: "chat", id: ev.id, stages: [], start: Date.now(), done: false };
+        renderStages();
+      } else if (ev.type === "stage") {
+        if (stageRun && stageRun.id === ev.id && stageRun.kind === ev.kind) {
+          stageRun.stages.push({ stage: ev.stage, ms: ev.ms });
+          if (ev.stage === "done") stageRun.done = true;
+          renderStages();
+        }
+      } else if (ev.type === "chat_partial") {
+        chatWaiting = false;
+        live.set(ev.id, { kind: "chat", text: ev.text || "" });
+        renderDialogue();
+      } else if (ev.type === "chat_done") {
+        settleLive(ev.id);
+        chatWaiting = false;
+        if (stageRun && stageRun.kind === "chat" && stageRun.id === ev.id) stageRun.done = true;
+        renderStages();
+        poll.soon();
+      }
+      setStatus();
+    };
   }
 
-  async function startSession() {
-    const track = stream?.getVideoTracks()[0];
-    await fetch("/session/start", { method: "POST", body: JSON.stringify({
-      camera_label: track?.label || (mode === "deskview" ? "Desk View (deskcap)" : ""),
-      video_res: mode === "deskview" ? [1920, 1440]
-                 : [el("video").videoWidth, el("video").videoHeight],
-    }) });
-    el("sessionpanel").hidden = true;
-    el("sessionbtn").hidden = true;
-    el("endbtn").hidden = false;
-    session = { start: performance.now(), left: SESSION_S, signal: [], snaps: [], paused: false,
-                framingShown: false, checksAtStart: checkCount < 0 ? 0 : checkCount, timers: [] };
-    session.timers.push(setInterval(async () => {          // dense frames
-      if (session.paused) return;
-      const b = await grabJpeg();
+  // ---------- always-on session recording (testdev) ----------
+  // Recording starts server-side at launch and runs until "End & rate" or
+  // the server stops. No timer, no consent panel: every live run is data.
+  const DENSE_MS = 3000, DENSE_LATE_MS = 10000, DENSE_SWITCH_MS = 600000;
+  let session = null;   // live-mode recorders: {timers, signal, paused, lastDense, ...}
+  let sessionMs = 0;    // server's elapsed recording clock
+
+  function sessionEvent(type, extra = {}) {   // run log always; the bundle too while recording
+    fetch("/session/event", { method: "POST", body: JSON.stringify({ type, ...extra }) }).catch(() => null);
+  }
+
+  function attachRecorders() {          // live mode: the browser is the camera
+    session = { signal: [], snaps: [], paused, lastDense: 0, framingShown: false,
+                start: performance.now() - sessionMs,   // align with the server's recording clock
+                checksAtStart: lastState ? lastState.checks.length : 0, timers: [] };
+    session.timers.push(setInterval(async () => {   // dense page photos, thinned after 10 min
+      if (session.paused || mode !== "live") return;
+      const gap = sessionMs > DENSE_SWITCH_MS ? DENSE_LATE_MS : DENSE_MS;
+      if (Date.now() - session.lastDense < gap) return;
+      session.lastDense = Date.now();
+      const b = await grabBlob();
       if (b) fetch("/session/frame", { method: "POST", body: b });
-    }, DENSE_MS));
-    session.timers.push(setInterval(() => {                // gating signal batch
+    }, 1000));
+    session.timers.push(setInterval(() => {         // gating signal batch
       if (session.signal.length) {
         fetch("/session/signal", { method: "POST", body: JSON.stringify(session.signal.splice(0)) });
       }
     }, 5000));
-    session.timers.push(setInterval(() => {                // countdown
-      if (!session.paused) {
-        session.left -= 1;
-        if (session.left <= 0) return endSession(false);
-      }
-      el("rec").textContent = session.paused ? "recording paused"
-        : `recording · ${Math.floor(session.left / 60)}:${String(session.left % 60).padStart(2, "0")} left`;
-    }, 1000));
-    el("rec").hidden = false;
-    el("rec").textContent = "recording · 10:00 left";
+    const track = stream?.getVideoTracks()[0];      // merge camera meta into the bundle
+    fetch("/session/start", { method: "POST", body: JSON.stringify({
+      camera_label: track?.label || "",
+      video_res: [el("video").videoWidth, el("video").videoHeight],
+    }) }).catch(() => null);
   }
 
-  async function endSession(early) {
-    const s = session;
+  function detachRecorders() {
+    if (session) session.timers.forEach(clearInterval);
     session = null;
-    s.timers.forEach(clearInterval);
+  }
+
+  function renderRec(s) {
+    sessionMs = s.session_ms || 0;
+    const canRecord = mode === "live" || mode === "deskview";
+    if (s.session_active) {
+      el("rec").hidden = false;
+      el("rec").classList.remove("off");
+      const m = Math.floor(sessionMs / 60000), sec = Math.floor(sessionMs / 1000) % 60;
+      el("rec").textContent = (session?.paused ? "recording paused · " : "recording · ") +
+                              m + ":" + String(sec).padStart(2, "0");
+      el("endbtn").hidden = false;
+      el("recbtn").hidden = true;
+      if (mode === "live" && !session) attachRecorders();
+    } else {
+      // not recording is never silent: the header says so and the control
+      // to start again sits where End & rate was (suggestion 2026-10-29:
+      // "MAKE a start recording button"). Checks, chats, ratings and
+      // suggestions still land in the run log either way.
+      el("rec").hidden = !canRecord;
+      el("rec").classList.add("off");
+      el("rec").textContent = "not recording";
+      el("endbtn").hidden = true;
+      el("recbtn").hidden = !canRecord || !el("sessionpanel").hidden;
+      detachRecorders();
+    }
+  }
+
+  async function endSession() {
+    detachRecorders();
     el("rec").hidden = true;
     el("endbtn").hidden = true;
     el("framingline").hidden = true;
     if (mode === "live") {
-      const final = await grabJpeg();
+      const final = await grabBlob();
       if (final) await fetch("/session/final", { method: "POST", body: final });
     }
-    const info = await (await fetch("/session/end", { method: "POST", body: JSON.stringify({ ended_early: early }) })).json();
-    annotate(info);
+    const info = await (await fetch("/session/end", { method: "POST", body: "{}" })).json();
+    if (info.path) annotate(info);
   }
 
   function annotate(info) {
-    const entries = (info.checks || [])
-      .map(c => ({ snap: c.snap, check: c.check, verdict: "", note: "" }));
+    const entries = (info.checks || []).map(c => ({ snap: c.snap, check: c.check,   // in-place ratings carry over
+      verdict: c.rating?.verdict || "", wrong_kind: c.rating?.wrong_kind || "", note: c.rating?.note || "" }));
     const p = el("sessionpanel");
     p.hidden = false;
     let i = 0;
@@ -857,6 +1768,9 @@
     function stepCheck() {
       if (i >= entries.length) return stepStuck();
       const c = entries[i];
+      // "Wrong" is a first-class verdict: one click, with a one-tap misread
+      // sublabel — "it is not reading it right" must never need the free-text
+      // box again (70 corpus checks, zero Wrong uses, the label went to prose)
       p.innerHTML = `<div class="panel">
         <h2>Note ${i + 1} of ${entries.length}</h2>
         <div class="checkview"><img src="/snap/${c.snap}" alt="Snapshot for this note">
@@ -865,13 +1779,31 @@
           <button class="pill" data-v="helped">Helped</button>
           <button class="pill" data-v="didnt">Didn’t help</button>
           <button class="pill" data-v="wrong">Wrong</button></div>
+        <div class="row wrongkind" id="aWrongKind" hidden>
+          <button class="pill small" data-w="misread">misread the page</button>
+          <button class="pill small" data-w="advice">read it fine, advice wrong</button></div>
         <div class="row"><input type="text" id="aNote" placeholder="What did you actually need here? (optional)"></div>
-        <div class="row"><button class="quiet" id="aNext">Next</button></div></div>`;
+        <div class="row"><button class="quiet" id="aNext">Next</button>
+        <button class="quiet" id="aSkip">Skip rating</button></div></div>`;
+      p.querySelectorAll(".verdicts .pill").forEach(b => b.classList.toggle("on", b.dataset.v === c.verdict));
+      p.querySelectorAll(".wrongkind .pill").forEach(b => b.classList.toggle("on", b.dataset.w === c.wrong_kind));
+      el("aWrongKind").hidden = c.verdict !== "wrong";
+      el("aNote").value = c.note;
       p.querySelectorAll(".verdicts .pill").forEach(b => b.onclick = () => {
         c.verdict = b.dataset.v;
         p.querySelectorAll(".verdicts .pill").forEach(x => x.classList.toggle("on", x === b));
+        el("aWrongKind").hidden = c.verdict !== "wrong";
+        if (c.verdict !== "wrong") c.wrong_kind = "";
+        el("aNote").placeholder = c.verdict === "wrong"
+          ? "What did it get wrong, exactly? (optional)"
+          : "What did you actually need here? (optional)";
+      });
+      p.querySelectorAll(".wrongkind .pill").forEach(b => b.onclick = () => {
+        c.wrong_kind = b.dataset.w;
+        p.querySelectorAll(".wrongkind .pill").forEach(x => x.classList.toggle("on", x === b));
       });
       el("aNext").onclick = () => { c.note = el("aNote").value; i++; stepCheck(); };
+      el("aSkip").onclick = () => saved();      // the bundle is already complete
     }
     function stepStuck() {
       p.innerHTML = `<div class="panel">
@@ -885,28 +1817,50 @@
         answers.stuck = el("aStuck").value;
         answers.wanted = el("aWanted").value;
         await fetch("/session/annotate", { method: "POST", body: JSON.stringify(answers) });
-        p.innerHTML = `<div class="panel">
-          <h2>Session saved</h2>
-          <p>${(info.path || "~/deskcap/session-…").replace(/</g, "&lt;")} (${info.mb ?? "?"} MB)</p>
-          <div class="row"><button class="quiet" id="aDelete">Delete this session</button>
-          <button class="pill" id="aClose">Done</button></div></div>`;
-        el("aClose").onclick = () => { p.hidden = true; el("sessionbtn").hidden = false; };
-        el("aDelete").onclick = async () => {
-          await fetch("/session/delete", { method: "POST" });
-          p.innerHTML = `<div class="panel"><h2>Session deleted</h2>
-            <div class="row"><button class="pill" id="aClose2">Done</button></div></div>`;
-          el("aClose2").onclick = () => { p.hidden = true; el("sessionbtn").hidden = false; };
+        saved();
+      };
+    }
+    function saved() {
+      p.innerHTML = `<div class="panel">
+        <h2>Session saved</h2>
+        <p>${(info.path || "~/deskcap/session-…").replace(/</g, "&lt;")} (${info.mb ?? "?"} MB)</p>
+        <div class="row"><button class="quiet" id="aDelete">Delete this session</button>
+        <button class="quiet" id="aAgain">Record again</button>
+        <button class="pill" id="aClose">Done</button></div></div>`;
+      el("aClose").onclick = () => { p.hidden = true; };
+      el("aAgain").onclick = async () => {
+        await fetch("/session/start", { method: "POST", body: "{}" });
+        p.hidden = true;
+        poll.soon();
+      };
+      el("aDelete").onclick = async () => {
+        await fetch("/session/delete", { method: "POST" });
+        p.innerHTML = `<div class="panel"><h2>Session deleted</h2>
+          <div class="row"><button class="quiet" id="aAgain2">Record again</button>
+          <button class="pill" id="aClose2">Done</button></div></div>`;
+        el("aClose2").onclick = () => { p.hidden = true; };
+        el("aAgain2").onclick = async () => {
+          await fetch("/session/start", { method: "POST", body: "{}" });
+          p.hidden = true;
+          poll.soon();
         };
       };
     }
     stepCheck();
   }
 
-  el("sessionbtn").addEventListener("click", showConsent);
-  el("endbtn").addEventListener("click", () => endSession(true));
+  el("endbtn").addEventListener("click", endSession);
+  el("recbtn").addEventListener("click", async () => {
+    el("recbtn").disabled = true;
+    await fetch("/session/start", { method: "POST", body: "{}" }).catch(() => null);
+    el("recbtn").disabled = false;
+    poll.soon();
+  });
 
   // ---------- state polling ----------
+  let pollTimer = null;
   async function poll() {
+    clearTimeout(pollTimer);
     let s;
     try {
       s = await (await fetch("/state")).json();
@@ -915,31 +1869,34 @@
     } catch (e) {
       failedAt = failedAt || Date.now();
       if (Date.now() - failedAt > 5000) el("banner").classList.add("on");
-      return setTimeout(poll, 1000);
+      pollTimer = setTimeout(poll, 1000);
+      return;
     }
     serverStatus = s.status;
     if (!mode) {
       mode = s.mode;
+      startEvents();
+      const savedView = localStorage.getItem("cono-view");   // persist across launches
+      if (savedView && savedView !== s.view)
+        fetch("/view", { method: "POST", body: JSON.stringify({ view: savedView }) }).catch(() => null);
       if (mode === "live") {
         el("pausebtn").hidden = false;
-        el("sessionbtn").hidden = false;
-        startCamera().then(() => { if (s.session_panel) showConsent(); });
+        startCamera();
       } else if (mode === "deskview") {
-        el("sessionbtn").hidden = false;
         el("pausebtn").hidden = false;
         el("reframebtn").hidden = false;
         el("phonehelp").hidden = false;
         el("caption").textContent = DESKVIEW_CAPTION;
         el("checknow").disabled = false;
-        startStream();
-        if (s.session_panel) showConsent();
+        startLivePoll();
       } else {
         el("demomark").hidden = false;
+        el("camwait").hidden = true;
         el("caption").textContent = "Replaying a recorded session — no camera in use.";
         el("checknow").disabled = false;
       }
     }
-    if (mode === "replay" || (mode === "deskview" && streamFailed)) {
+    if (mode === "replay") {
       if (s.frame && s.frame_n !== lastFrameN) { lastFrameN = s.frame_n; showReplayFrame(s); }
     }
     if (mode !== "live" && s.status === "watching") manualPending = false;
@@ -962,7 +1919,7 @@
       showOffline(["The Desk View camera couldn't run.",
         s.cap_error + " Close other camera apps, or allow camera access for your " +
         "terminal app in System Settings → Privacy & Security → Camera — then try again. " +
-        "(No Desk View on this Mac? Restart as `cono-check browser` to use an iPhone or webcam.)"],
+        "(No Desk View on this Mac? Restart as `cono browser` to use an iPhone or webcam.)"],
         async () => {
           const r = await fetch("/camera/retry", { method: "POST" });
           if (r.ok) {
@@ -970,15 +1927,25 @@
             camWaiting = false;
             el("offline").style.display = "none";
             el("caption").textContent = DESKVIEW_CAPTION;
-            startStream();
+            startLivePoll();
           }
         });
       el("caption").textContent = "";
     }
-    if (s.checks.length !== checkCount || pending.length) {
-      checkCount = s.checks.length;
-      renderFeed(s.checks);
-    }
+    lastState = s;
+    pruneLive(s);
+    if (checksPaused !== !!s.checks_paused) renderPause(s.checks_paused);
+    if ((s.thread && s.thread.length) || (s.checks && s.checks.length) || pending.length)
+      el("empty")?.remove();
+    renderTwin(s);
+    renderRibbon(s.checks || []);
+    renderDialogue();
+    renderHistory(s.checks || []);
+    renderView(s);
+    renderDev(s);
+    renderContrast(s);
+    renderStages();
+    renderRec(s);
     if (session && !session.framingShown && s.checks.length > session.checksAtStart) {
       const first = s.checks[0];            // first check since recording started
       if (first && first.visibility != null) {
@@ -987,8 +1954,9 @@
       }
     }
     setStatus();
-    setTimeout(poll, 1000);
+    pollTimer = setTimeout(poll, 1000);
   }
+  poll.soon = () => { clearTimeout(pollTimer); poll(); };
   poll();
 })();
 </script>

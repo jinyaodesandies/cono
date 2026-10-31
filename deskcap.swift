@@ -86,7 +86,7 @@ func fail(_ msg: String) -> Never {
     exit(1)
 }
 
-/// Machine-readable state for a supervisor (cono-check): "waiting …", "lost …", "live".
+/// Machine-readable state for a supervisor (cono): "waiting …", "lost …", "live".
 func status(_ s: String) { log("deskcap status: " + s) }
 
 func log(_ s: String) {

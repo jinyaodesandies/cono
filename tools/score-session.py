@@ -25,11 +25,11 @@ def table(title, groups):
     lines = [f"### by {title}", "",
              "| " + title + " | checks | rated | helped | wrong | helped-rate | mean latency |",
              "|---|---|---|---|---|---|---|"]
-    for key, rows in sorted(groups.items()):
+    for key, rows in sorted(groups.items(), key=lambda kv: str(kv[0])):
         r = rate(rows)
         lines.append(f"| {key} | {r['checks']} | {r['rated']} | {r['helped']} | {r['wrong']} | "
                      f"{r['helped_rate'] if r['helped_rate'] is not None else '—'} | "
-                     f"{r['mean_latency_s']}s |")
+                     f"{str(r['mean_latency_s']) + 's' if r['mean_latency_s'] is not None else '—'} |")
     return lines + [""]
 
 
@@ -42,18 +42,33 @@ def main():
                f"duration {m['duration_s']}s · {len(checks)} checks · camera {m.get('camera_label', '?')}",
                f"stuck: {m['annotations'].get('stuck', '')!r} · wanted: {m['annotations'].get('wanted', '')!r}", ""]
         overall = rate(checks)
-        out.append(f"**Overall:** {overall['helped']}/{overall['rated']} helped "
-                   f"({overall['helped_rate']}), {overall['wrong']} wrong, "
-                   f"mean latency {overall['mean_latency_s']}s")
+        if overall["rated"]:
+            out.append(f"**Overall:** {overall['helped']}/{overall['rated']} helped "
+                       f"({overall['helped_rate']}), {overall['wrong']} wrong, "
+                       f"mean latency {overall['mean_latency_s']}s")
+        else:
+            out.append(f"**Overall:** {overall['checks']} checks, none rated "
+                       f"(rating pass skipped), mean latency {overall['mean_latency_s']}s")
         out.append("")
         for dim, key in (("style", lambda c: c.get("config", {}).get("style", c.get("style", "?"))),
                          ("structure", lambda c: c.get("config", {}).get("structure", "?")),
                          ("width", lambda c: c.get("config", {}).get("width", "?")),
+                         ("contrast", lambda c: c.get("contrast", "?")),
                          ("reason", lambda c: c.get("reason", "?"))):
             groups = defaultdict(list)
             for c in checks:
                 groups[key(c)].append(c)
             out += table(dim, groups)
+        stages = defaultdict(list)          # where does check latency live?
+        for c in checks:
+            for s in c.get("stages") or []:
+                stages[s["stage"]].append(s["ms"])
+        if stages:
+            out += ["### stage timing (ms from check start)", "",
+                    "| stage | n | mean | max |", "|---|---|---|---|"]
+            for name, ms in sorted(stages.items(), key=lambda kv: sum(kv[1]) / len(kv[1])):
+                out.append(f"| {name} | {len(ms)} | {round(sum(ms) / len(ms))} | {max(ms)} |")
+            out.append("")
         notes = [(c["snap"], c["annotation"]["note"]) for c in checks
                  if (c.get("annotation") or {}).get("note")]
         if notes:

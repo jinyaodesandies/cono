@@ -1,0 +1,2193 @@
+#!/usr/bin/env python3
+"""cono — Cono's checking component as a local web app: a live
+digital twin of the page on your desk.
+
+The camera watches your page; the page diffs the video locally, and only
+when you pause writing does one frame go to Claude (`claude` CLI — your
+Claude Code login, no API key), which streams back, fast fields first:
+
+  visibility n/10   what the camera can actually see
+  problem card      the question you're on, your progress, a Next button
+  check             hint-first: where the mistake is, never the answer
+  readability map   green/red page-shaped grid: what could/couldn't be read
+  equations         the relations the problem runs on, ? for unknowns
+  on your page      faithful transcription, student's errors preserved
+
+The twin is the product: problem card + dialogue, equations, the
+transcribed page, readability map. The twin is also the pointing
+surface: click a transcribed line, a relation, the problem card, or a
+readability cell to anchor a typed question to that exact thing. The
+Next button advances the problem card and pins it there until your
+writing genuinely moves on. Questions, once read clearly, live in a
+registry and never reword themselves because a hand covered the sheet;
+transcribed handwriting is sticky the same way (unchanged ink keeps its
+earlier reading verbatim). Chem/math is typeset (H2O-style subscripts,
+charges, arrows) everywhere it appears. Replies stream — first text in
+~1-3 s, and a silent 20 s kills and retries the call once.
+
+Trust guards (server-side, every note): advice already given is never
+repeated — a repeat escalates one ladder rung or goes quiet, a third
+identical nudge is suppressed; a disputed reading (the student contradicts
+what Cono read, or ignores the same advice twice) triggers a full-res
+re-read of the contested region with explicit permission to concede; a
+region unreadable two checks running gets a zoomed close-up on the next
+check; "nothing new" narration never becomes a note card, and a "nothing
+new" that contradicts the page-change signal is suppressed as a misfire.
+
+Usage:
+  cono                     # the Desk View camera (top-down on your desk) - the default
+  cono browser             # fallback: any browser camera (iPhone Continuity, webcam)
+  cono demo                # no camera needed: bundled sample session (demo chem = chemistry)
+  cono doctor              # preflight: is everything ready to run?
+  cono --model sonnet      # pick the model (default: opus)
+  cono --replay DIR        # replay any recorded session directory
+  cono --port 9000         # serve somewhere else (default: 8764)
+  cono --contrast strong   # writing clarity: off | auto (default) | strong
+  cono --no-contrast       # same as --contrast off
+  cono --no-record         # testdev opt-out: run live without recording
+  cono --dev               # start in dev mode (show instrumentation)
+  cono --view ambient      # start in the ambient face (default: twin)
+  cono --no-open           # don't open the browser automatically
+Ctrl-C to stop.
+
+STUDY vs DEV. The page opens in study mode: just the twin — problem card,
+relations, page, map, dialogue, cone — with automatic defaults. The quiet
+"dev" switch (or --dev) reveals the instrumentation together: stage
+trace, writing-clarity cycler, per-check latency and clarity tags, the
+bundle path, and rating pills (helped / didn't help / wrong) on every
+note and reply, saved the moment they're clicked. Modes change only what
+is SHOWN; recording and per-check metadata never stop. An always-
+reachable "Suggest an improvement" box (both modes) appends each
+suggestion, timestamped with its context (problem, last check, frame,
+mode/config, run dir), to the run log, the session bundle when
+recording, and ~/deskcap/suggestions.jsonl, which accumulates across
+sessions.
+
+RUN LOG - never stops. Every run (any mode, recording or not) writes
+~/deskcap/check-<timestamp>/run.jsonl beside its frames: every check
+with its raw reply, every chat and reply, rating, suggestion, pause and
+button press. 2026-10-29 lost 80 minutes of checks and chat to an early
+"End & rate"; the run log is the floor under the session bundle.
+
+PAUSE CHECKING - camera and recording keep running, but no automatic
+snapshot is sent until Resume (Check now and typed questions still go
+out). NO PAGE IN VIEW - an automatic check whose frame holds no paper
+(paper_frac < NO_PAGE_AT, Pillow-if-present) is answered locally and
+never sent.
+
+TESTDEV MODE - every live run records. From launch until "End & rate"
+(or the server stops), each live run (deskview or browser) saves a full
+session bundle locally: a dense photo of the page (every 3 s for the
+first 10 minutes, every 10 s after), every snapshot read, every note,
+chat, pen-point and button press - all in ~/deskcap/session-<timestamp>/.
+Ending shows the rating pass (Helped / Didn't help / Wrong per note -
+pre-filled from in-place ratings, skippable); the bundle is complete and
+scoreable either way, and one click deletes it. After ending, the header
+reads "not recording" and a Start recording button begins a new bundle. The server prints the folder size every 10 minutes and
+at the end. Nothing leaves the machine beyond the snaps Claude already
+reads. Opt out with --no-record. (`session` is accepted as a no-op alias
+from the 10-minute era.) Demo/replay runs never record.
+
+Snaps get a writing-clarity pass before the model reads them. "auto"
+(default) is a global histogram stretch - near-no-op on well-lit pages, a
+lift on faint pencil. "strong" goes after faint strokes: flatten uneven
+lighting (subtract a blurred background), stretch the flattened contrast,
+gamma mid-gray graphite toward black, lightly sharpen stroke edges
+(grayscale output). Browser snaps are processed on the canvas before
+upload; deskview/replay frames in place server-side when Pillow is
+installed (optional - everything works without it). The stored snap, the
+thumbnail, and what the model reads are always the same pixels; each
+check logs which pass its snap got. Switch mid-session with the "writing
+clarity" button (dev mode), or start with --contrast MODE.
+
+Test feature: a "check stages" strip in the side column traces each
+in-flight check/chat through the real pipeline stages (contrast, sent,
+first streamed word, then each reply section as it arrives) with elapsed
+time - driven by server events, never a timer. Toggle it with the
+"stage trace" button; per-stage ms is logged into session bundles and
+tabled by tools/score-session.py.
+"""
+import base64, csv, json, os, queue, re, shutil, signal, struct, subprocess, sys, threading, time
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+try:
+    sys.stdout.reconfigure(line_buffering=True)   # latency lines show up when piped
+except Exception:
+    pass
+
+try:
+    # optional, never required: server-side contrast normalization for frames
+    # that don't pass through the browser canvas (deskview, replay, demo)
+    from PIL import Image as _PILImage, ImageOps as _PILImageOps
+    PIL_OK = True
+except ImportError:
+    PIL_OK = False
+try:
+    # optional, never required: numpy enables the waterfill low-light pass
+    # (the clarity gate falls back to the strong pass without it)
+    import numpy as _np
+    NUMPY_OK = True
+except ImportError:
+    NUMPY_OK = False
+
+HERE = Path(__file__).resolve().parent
+INDEX = HERE / "index.html"
+SAMPLE = HERE / "sample"
+
+
+def ensure_deskcap():
+    """Find the deskcap capture binary (Desk View needs AVFoundation, not a
+    browser — browsers can't enumerate the deskViewCamera device), building
+    it from the bundled source if needed."""
+    for p in (HERE / "deskcap", HERE.parent / "deskcap" / "deskcap"):
+        if p.exists():
+            return p
+    if not shutil.which("swiftc"):
+        sys.exit("deskcap is needed for Desk View and couldn't be built. Install the Xcode "
+                 "command line tools (xcode-select --install) and rerun.")
+    print("building deskcap (first run, ~20 s)…")
+    tmp = HERE / f".deskcap.build-{os.getpid()}"
+    cmd = ["swiftc", "-O", "-framework", "AppKit", "-framework", "AVFoundation",
+           "-framework", "CoreImage", "-framework", "ImageIO",
+           "-o", str(tmp), str(HERE / "deskcap.swift")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        os.replace(tmp, HERE / "deskcap")        # atomic: a running deskcap keeps its old file
+        return HERE / "deskcap"
+    tmp.unlink(missing_ok=True)
+    err = r.stderr
+    if "redefinition of module 'SwiftBridging'" in err:
+        hint = ("a stale file from an older Command Line Tools install is shadowing the new one; "
+                "remove it: sudo rm /Library/Developer/CommandLineTools/usr/include/swift/module.modulemap")
+    else:
+        hint = "\n".join(l.strip() for l in err.splitlines() if "error:" in l)[:600] or err[-600:]
+    sys.exit(f"deskcap is needed for Desk View and couldn't be built — {hint}")
+
+# server-side gating for replay/deskview (live mode gates in the browser
+# with the same numbers). The live video stream is display-only — Claude
+# only ever receives gated snaps, at most one per MIN_GAP_S.
+DIRTY_AT = 0.20       # changed_frac above this = real activity (writing, hand)
+STABLE_AT = 0.10      # changed_frac below this = calm enough to read
+MAX_DIRTY_S = 20      # mid-activity "checking in" snap after this long dirty
+MIN_GAP_S = 5         # hard floor between automatic snaps sent to Claude
+STUCK_S = int(os.environ.get("CONO_STUCK_S", 120))   # quiet this long after writing = maybe stuck
+
+PROMPT = """You are Cono, an AI study tutor watching a student's page as it lies on their desk, through a top-down camera. The attached image is the latest capture of the page.
+{context}
+Respond in EXACTLY this plain-text format, no markdown, fields in this exact order. Never respond with anything else: no meta-commentary about the image, the prompt, or whether this looks like a test or sample - a blank or odd page still gets the format below.
+
+VISIBILITY: n/10 - one short line: what the camera sees; which edges are cut off; whether small details (exponents, subscripts and coefficients in formulas, charges, reaction arrows, fraction bars, units, exact digits) are readable; note blur or glare.
+WORKING ON: 3-8 words naming what the student is currently doing (e.g. "part e - complementation table"), or "nothing new" if there is no new work. Never a full sentence.
+PROBLEM: the problem the student is currently on, exactly as: <the worksheet's own printed label> | <that question restated in at most 12 words> | <the student's progress on it in at most 8 words, or "not started">. If the context lists known questions, match the student's work against them and copy that label and question text EXACTLY as listed, word for word. A hand, pen, shadow, blur, or anything covering printed text is NEVER evidence that a question changed - the printed sheet does not rewrite itself; spend your reading effort on the student's new handwriting instead. Give a label and question that are not in the known list only when the visible work cannot belong to any known question. If the page has no labeled problems, invent a short stable label from the content.
+ON PAGE: the student's handwritten work, line by line, numbered L1, L2, L3 ... Copy exactly what is written, character for character, preserving the student's own errors - NEVER correct, complete, or normalize anything. Preserve notation exactly as written: subscripts vs coefficients in chemical formulas (write H2O's subscript as H2O, a coefficient as 4O2), reaction arrows -> and <=>, charges, state symbols like (aq) (s) (g), units, and the exact digits written - trailing zeros matter. Write (?) for any token you cannot read. If the context carries an earlier reading of this handwriting, it is your own established baseline: for every line whose ink has not visibly changed, copy that line from the baseline VERBATIM, character for character - never produce a new variant reading of unchanged ink; spend your fresh reading effort only on new or changed handwriting, and depart from the baseline only where you can see at high confidence that it was wrong (then give the whole corrected line). Do NOT copy printed question text - give each item's printed label, then the handwriting under it; skip items with no handwriting. If no handwriting is readable, ON PAGE is exactly one line: "L1 (?)" - that shape, never prose, never a description of the scene (what IS visible belongs in VISIBILITY).
+TALLY: one line of private working in shorthand that your check depends on - recount atom balances element by element (e.g. "O: L 4x2=8, R 3x2+4=10"), re-run the arithmetic digit by digit, re-run the unit chain, and when a computed result is written with its digits, count significant figures explicitly: each input's sig figs and the result's ("11.0 -> 3 sf, 44.1 -> 3 sf, result 32.86800 -> 7 sf - OFF, should be 3") - a result carrying more sig figs than its least-precise input is OFF even when the arithmetic itself is right. Do all of this BEFORE judging, ending each count with a plain verdict ("8 vs 10 - OFF", "ok") - the verdict must follow from the two numbers you just wrote: if they differ, it is OFF, no matter what you expected. Count from your ON PAGE transcription above, and only the student's own handwritten line, never a printed unbalanced equation. Judge written arithmetic on the digits the student actually wrote - normal rounding is not an error, but unjustified extra precision is. Write "none" if no counting is involved.
+CHECK: {check_style} CHECK must agree with the TALLY verdicts, never contradict them - if TALLY found a mismatch, that mismatch is the thing to point at (hint-first); if TALLY says ok, do not invent an error. Refer to problems by the worksheet's own printed labels (part c, question 2, row 3) when they exist; use L-numbers only for unlabeled lines. Prefer chem/math shorthand over prose ("O: 2 left vs 3 right", "units: g ÷ g/mol → mol") and keep it terse. If both a confirmation and an issue apply, put the confirmation first. Comment ONLY on student work that is new or changed since the earlier reading in the context - never repeat feedback you already gave, and never list unanswered or blank items. {no_new_rule} For science work, check what the domain requires - mass and charge balance in equations, unit consistency through a calculation, significant figures, table symmetry - still hint-first, never the corrected coefficient or value. Never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. If nothing is readable, give one concrete tip to fix the framing. {escalation}
+KIND: one word - "confirm" if the newly checked work is right, "fix" if you are pointing at a mistake, "idle" if there is no new student work to check, "setup" if the page is unreadable or badly framed.
+GRID: a readability map of the sheet of paper itself (ignore the desk around it): exactly 6 lines of 4 digits, each digit one cell of the page in reading order, top-left cell first. 2 = ink or print there and readable, 1 = something written or printed there but too blurry, small, cut off, or glared to read reliably, 0 = blank paper. If no page is in frame, give 6 lines of 0000.
+EQUATIONS: ALL the relations that govern the problem in PROBLEM, up to 4 - taken from the page if the student wrote them, otherwise the standard relations the problem needs. One complete relation per line, never truncated, plain notation: _ for subscript (H_2O), ^ for superscript (SO_4^2-), -> and <=> for reaction arrows, and ? in place of each quantity the student has not found yet; then " :: " and at most 4 words naming the relation. Never reveal a value or coefficient the student still has to find or fix - put ? in its place (their balancing wrong -> write ?O_2, never the corrected coefficient). Write "none" if none apply. If WORKING ON is "nothing new" and PROBLEM is the current problem from the context, write exactly "EQUATIONS: same" - the relations already shown are kept."""
+
+CONTEXT_BLOCK = """
+Context from your earlier looks. The known questions and the baseline reading below are your own established state: trust them for ink that has not changed, and read only new or changed ink fresh from the image.{questions}
+Current problem: {problem}{pin_note}
+Your earlier reading of the student's handwriting (the baseline - copy lines whose ink has not changed from here VERBATIM):
+{last_on_page}
+Your recent notes to the student (do not repeat these):
+{last_checks}{advice}{thread}
+If the page has flipped to a different sheet, treat it as fresh context and name the new page in WORKING ON.
+"""
+
+ANSWERED_NOTE = """
+In the conversation you have already given the student the full answer to this problem. Do not hint toward it again or ask guiding questions about it: only check whether what they write matches it - confirm when it does, and point once at a remaining difference when it does not."""
+
+ADVICE_BLOCK = """
+Advice you have ALREADY given on this problem (never give any of it again, even reworded; if the same issue still stands, move ONE rung up the ladder - a guiding question becomes one worked step - or say something genuinely new; if you can no longer verify the issue from the image at high confidence, drop it and build on what the student wrote):
+{lines}"""
+
+REPEAT_NOTE = """
+You have pointed at the same thing more than once and the student has not changed it. Re-verify that premise from the image at full attention this check. If you can still see it clearly, escalate: give ONE worked step toward fixing it, not the hint again. If you cannot verify it at high confidence, your reading may be the wrong one - concede: do not restate the advice; comment on something else or set KIND to "idle"."""
+
+ZOOM_NOTE = """
+The second image is a full-resolution close-up (or full-resolution copy) of the page region you could not resolve in earlier looks, or that the student disputes. Read the contested details directly from it this check - never ask the student to read them to you. If even the close-up cannot settle it, accept the student's version as fact and build on it."""
+
+DISPUTE_NOTE = """
+The student is disputing or re-asserting what their page actually says - treat their reading as probably correct. Re-read the disputed detail from the attached image (a full-resolution copy is included) before answering. If you can now verify it, say plainly what the page shows. If you cannot verify it at high confidence, CONCEDE: accept the student's reading as fact, say so without fuss ("you're right - taking the table as showing..."), and carry the problem forward from their reading. NEVER tell the student to re-read, look again at, or double-check something they have already read out to you - between the two of you, you are the one with the reading problem."""
+
+THREAD_BLOCK = """
+Recent conversation with the student about this problem:
+{lines}"""
+
+# the four feedback moves (plans/feedback-policy.md is the source of truth);
+# "question" is the default; sessions rotate through all of them
+CHECK_STYLES = {
+    "question": "ONE move, at most 2 sentences, plain warm tone, no exclamation marks, brief process praise only. If the newest work is right: confirm it using the student's own written words and point at the natural next step. If there is a mistake: ask ONE guiding question that implies where the error is - never state the corrected answer, value, or method name.",
+    "principle": "ONE move, at most 2 sentences, no exclamation marks. State the single rule, formula or principle the newest work uses or misuses, as a plain declarative - without pointing at a specific line and without the corrected answer. If the work is right, name the principle that makes the next step work.",
+    "point": "ONE sentence only. If there is a mistake, say only where to look again (the worksheet's own label) - no explanation, no answer. If the newest work is right, say so plainly.",
+    "next-step": "At most 2 sentences, no exclamation marks. Do not hunt for errors. Name the kind of move a good next step would be - not the worked-out result. If the student seems stuck or the page is barely started, offer ONE orientation nudge: restate what the problem asks or point at the first thing to decide.",
+}
+
+NO_NEW_RULE = "If there is no new student work, CHECK must be at most one short line."
+
+ESCALATION = """The student pressed "check now" themselves. If your recent notes already asked a guiding question about an error that is still unfixed with no new attempt, escalate instead of repeating: give ONE worked step toward fixing it (not the final answer). If you already gave a worked step for it, give the answer plainly and offer: "want to explain it back to me on paper?". Never refuse or moralize."""
+
+STUCK_NOTE = """The student has written nothing for a while and may be stuck. This check is the one exception to the no-new-work rule: even though nothing new is on the page, give ONE gentle orientation nudge about the problem they appear stopped on - restate what it asks in plain words, or name the first thing to decide, building on their last written step. Do not list tasks and do not mention the pause itself. Set KIND to "fix"."""
+
+NEXT_NOTE = """The student pressed "Next" - they are moving on from {label}. PROBLEM must name the next problem printed on the page after it, even if nothing is written there yet. Make CHECK one short orientation line for that next problem - what it asks or the first thing to decide. Set KIND to "confirm" if the finished problem's work looks complete and right, otherwise "fix" pointing once at what is unresolved there."""
+
+PIN_NOTE = """
+The student pressed Next and manually advanced to {pin}: keep PROBLEM on {pin} (or a later problem), even though the page's most recent work is on an earlier one - only name an earlier problem again if brand-new handwriting has just appeared on it."""
+
+QUESTIONS_BLOCK = """
+Known questions on this worksheet (ground truth - the printed sheet does not change; copy these word for word, never re-read or reword them):
+{qlist}"""
+
+STYLE_ORDER = ["question", "principle", "point", "next-step"]
+
+# live-session experiment: each check rotates through these configs, and
+# the manifest records which config produced which check. The snap cadence
+# also loosens through the session (watcher/gateTick: 5s → 12s → 20s floors).
+SESSION_CONFIGS = [
+    # width settled at 1280 (report 18): token-neutral vs 960 on the harness
+    # but it fixed the live row-binding misread; never go above ~1280 — the
+    # API clamps images at ~1.15 MP (≈1238 px for 4:3), so anything wider is
+    # resampled twice and measured WORSE (1568: 134/136 vs 1280's 135/136).
+    # 1920 dropped after session 2026-10-21 (slowest width, no quality gain);
+    # twopass dropped with the streaming pipeline (one ordered stream is faster)
+    {"style": "question",  "structure": "stream", "width": 1280},
+    {"style": "principle", "structure": "stream", "width": 1280},
+    {"style": "point",     "structure": "stream", "width": 1280},
+    {"style": "next-step", "structure": "stream", "width": 1280},
+]
+
+CHAT_PROMPT = """You are Cono, an AI study tutor watching a student's page as it lies on their desk, through a top-down camera. The attached image is the latest capture of the page.{anchor_note}
+The student typed a message to you about their work. Reply with ONLY the words you would say to the student - no field headers, no markdown, no repeating their message back, and never narrate your reasoning, the ladder, ask counts, or policy.
+
+Current problem: {problem}
+Your latest reading of their handwriting (their errors preserved):
+{last_on_page}
+Your recent margin notes (do not repeat them):
+{last_checks}
+Conversation so far on this problem:
+{thread}
+
+Ladder policy - never refuse help, never hand over the answer early. Counting this message, the student has explicitly asked for help on this problem {asks} time(s). If the message asks for the answer, the fix, or the next step on flagged work: on ask #1, give ONE worked step with a one-clause reason if your notes already asked a guiding question about it, otherwise ask ONE guiding question; on ask #2 or later, give the full remaining answer plainly, keeping their correct lines, and end with "want to explain it back to me on paper?". A direct question about what a problem means, a definition, a concept (how or why something works), or something readable off the page may be answered directly at any rung. Answer what was asked first: a yes/no or either/or question opens with the answer ("No - ...", "It doesn't, because ..."), a question about a value or term opens with it; never open with background or a restatement before the answer. At most 2 short sentences (the full answer may take the space it needs); chem/math shorthand over prose; no exclamation marks; use the worksheet's own printed labels; never say or imply the student uploaded, pasted, or sent you anything - you are looking at their desk. When your answer hinges on a count or on arithmetic, redo the count digit by digit in shorthand as part of the reply ("O: L 4x2=8, R 3x2+4=10") instead of asserting a total from memory, and your stated conclusion must agree with the two numbers you just wrote - if they differ, say they differ. If the student tells you what their page or the printed sheet says and it differs from your reading, their reading wins unless you can point at the exact place in the image that shows otherwise - never tell them to re-read or double-check something they just read out to you.
+
+{intent_note}Student: {text}"""
+
+# page-level quick actions (suggestions 2026-10-29: "tell me if there are any
+# more trick questions", "read this worksheet and give me a review of the
+# background concepts"): one tap, a full-resolution copy of the page rides
+# along so the printed questions can be read, and the length limit lifts
+CHAT_INTENTS = {
+    "tricks": ("Any trick questions on this page?", """This is a page scan, and it overrides the length limit above. Read every printed question on the visible sheet (a full-resolution copy of the page is attached). Open with the answer - how many questions hide a trap, or "None that I can see". Then, one short line each, name every question with a trap by its printed label and say what KIND of trap it is - an exception to the usual trend, a reversed order ("least to most"), a units or sign trap, a subtle word - without giving its answer, the correct order, or the value. Separate items with line breaks, no markdown.
+"""),
+    "review": ("Review the background concepts for this sheet.", """This is a page review, and it overrides the length limit above. Read the printed questions on the visible sheet (a full-resolution copy of the page is attached) and review the background they rely on: 2 to 5 concepts in the order the sheet uses them, one or two plain lines each - the rule or definition, and its relation in plain notation if one applies, plus the usual exception if the sheet tests one. Do not solve or order any question on the sheet. Separate concepts with line breaks, no markdown, no headings.
+"""),
+}
+
+# pointing lives in the digital twin: the student clicks a transcribed line,
+# a relation, the problem card, or a readability-map cell, and the anchor
+# carries that element's own text (or page region) to the model.
+ANCHOR_NOTES = {
+    "region": """
+The student is pointing at the {text} of the page{crop}. Treat the message as being about what is written right there, and say what you see at that spot if they ask.""",
+    "line": """
+The student is pointing at this line of their handwriting (from your own transcription): "{text}". Treat the message as being about exactly that line.""",
+    "equation": """
+The student is pointing at this relation shown in their twin panel: "{text}". Treat the message as being about exactly that relation.""",
+    "problem": """
+The student is pointing at the pinned problem card: "{text}". Treat the message as being about that problem as a whole.""",
+}
+
+
+class State:
+    """Everything the UI needs, guarded by one lock."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.status = "watching"        # watching|checking (writing is client-side)
+        self.mode = "live"              # live|replay
+        self.model = "opus"
+        self.frame = None               # latest replay frame filename
+        self.frame_n = 0
+        self.checks = []                # newest first
+        self.check_asap = False         # replay mode: Check now button
+        self.snap_n = 0
+        self.record = True              # testdev: live modes record unless --no-record
+        self.dev = False                # dev mode: show instrumentation (logging never stops)
+        self.view = "twin"              # display face: twin (default) | ambient
+        self.cap_error = None           # deskview mode: deskcap died (permission, camera busy)
+        self.cap_waiting = None         # deskview mode: camera missing, deskcap waiting for it
+        self.cap_paused = False         # deskview mode: user paused — deskcap stopped on purpose
+        self.cap_reframing = False      # deskview mode: Apple's Desk View set-up window is open
+        self.last_on_page = ""          # page-state memory: latest good transcription
+        self.last_checks = []           # ...and the last few notes given (don't repeat)
+        self.checking_n = 0             # checks in flight (two workers)
+        # --- the digital twin ---
+        self.problem = None             # {"label","question","progress"} current problem card
+        self.questions = {}             # registry: label -> question text, ground truth once seen
+        self.pinned_label = None        # problem the student advanced to with Next (sticks)
+        self.pinned_from = None         # ...and the one they left (reject snap-backs to it)
+        self.equations = []             # [{"eq","name"}] relations for the current problem
+        self.grid = []                  # readability map: list of digit-strings, rows of the page
+        self.grid_snap = None           # the snap the grid describes
+        self.grid_time = ""
+        self.threads = {}               # problem label -> [{"who","text","time","kind","snap","id"}]
+        self.asks = {}                  # problem label -> explicit asks so far (ladder position)
+        self.next_from = None           # label the student pressed Next on (consumed by next check)
+        self.latest_img = None          # newest stored image filename (chat reads this)
+        self.msg_id = 0                 # ids for checks + chat messages (SSE correlation)
+        self.contrast = "auto"          # writing clarity on snaps: off | auto | strong
+        self.snap_enh = {}              # live mode: snap name -> pass the browser applied
+        # --- trust & dialogue (batch 2) ---
+        self.advice_log = {}            # label -> [{"toks","text","n"}]: advice already given (dedup)
+        self.cant_resolve = {}          # label -> consecutive checks that flagged an unreadable fact
+        self.disputes = {}              # label -> True once the student disputed our reading
+        self.misfires = 0               # "nothing new" claims suppressed against a changing page
+        # --- 2026-10-29 test round ---
+        self.ratings = {}               # message id -> {"verdict","wrong_kind","note"}: rated in place
+        self.checks_paused = False      # Pause checking: camera + recording run, nothing is sent
+        self.answered = {}              # label -> True once chat gave the full answer (no re-hinting)
+        self.no_page = 0                # automatic checks skipped locally: no paper in frame
+
+    def thread(self):
+        """The current problem's thread, with page-level messages (asked before
+        any problem was identified) woven in by id - they used to vanish the
+        moment the first check named a problem (E2E 2026-10-29: a streamed
+        reply disappeared in 26 of 90 samples)."""
+        label = (self.problem or {}).get("label")
+        own = self.threads.setdefault(label, []) if label else []
+        page = self.threads.get("page", []) if label != "page" else []
+        return sorted(own + page, key=lambda m: m.get("id") or 0) if page else own
+
+    def snapshot(self):
+        with self.lock:
+            label = (self.problem or {}).get("label")
+            return {
+                "status": self.status, "mode": self.mode, "model": self.model,
+                "frame": self.frame, "frame_n": self.frame_n,
+                "checks": self.checks[:30],
+                "session_active": SESSION.active, "cap_error": self.cap_error,
+                "cap_waiting": self.cap_waiting, "cap_paused": self.cap_paused,
+                "cap_reframing": self.cap_reframing,
+                "session_ms": SESSION.t() if SESSION.active else 0,
+                "session_path": str(SESSION.dir) if SESSION.active else None,
+                "record": self.record, "dev": self.dev, "view": self.view,
+                "checks_paused": self.checks_paused, "ratings": self.ratings,
+                "run_log": str(RUNLOG.path) if RUNLOG.path else None,
+                "twin": {
+                    "problem": self.problem, "equations": self.equations,
+                    "grid": self.grid, "grid_snap": self.grid_snap,
+                    "grid_time": self.grid_time, "on_page": self.last_on_page,
+                    "pinned": self.pinned_label,
+                    "questions": [{"label": k, "question": v} for k, v in self.questions.items()],
+                },
+                "thread": self.thread()[-40:],
+                "asks": self.asks.get(label, 0),
+                "contrast": self.contrast, "pillow": PIL_OK,
+            }
+
+
+class Events:
+    """Server-sent events: streamed check/chat text and twin updates."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.clients = []               # queue.Queue per connected /events client
+
+    def register(self):
+        q = queue.Queue(maxsize=400)
+        with self.lock:
+            self.clients.append(q)
+        return q
+
+    def unregister(self, q):
+        with self.lock:
+            if q in self.clients:
+                self.clients.remove(q)
+
+    def emit(self, **ev):
+        data = json.dumps(ev)
+        with self.lock:
+            for q in self.clients:
+                try:
+                    q.put_nowait(data)
+                except queue.Full:
+                    pass
+
+
+EVENTS = Events()
+
+STAGE_FIELDS = ["VISIBILITY", "WORKING ON", "PROBLEM", "ON PAGE", "TALLY",
+                "CHECK", "KIND", "GRID", "EQUATIONS"]
+
+
+class Stages:
+    """Per-check/chat stage timestamps — a test feature: Yao watches where
+    the time goes. Every transition is a real pipeline event (never a timer):
+    contrast done, request sent, first streamed token, each reply-contract
+    section appearing in the stream, done. Emitted live over SSE and logged
+    into session records so score-session can show where latency lives."""
+
+    def __init__(self, cid, kind):
+        self.cid, self.kind = cid, kind
+        self.t0 = time.time()
+        self.list = []                  # [{"stage": name, "ms": since-start}]
+        self.seen = set()
+        self.pending = list(STAGE_FIELDS)
+
+    def hit(self, name):
+        if name in self.seen:
+            return
+        self.seen.add(name)
+        ms = int((time.time() - self.t0) * 1000)
+        self.list.append({"stage": name, "ms": ms})
+        EVENTS.emit(type="stage", kind=self.kind, id=self.cid, stage=name, ms=ms)
+
+    def scan(self, text):
+        """Called per stream delta: mark reply sections as their headers appear."""
+        self.hit("first word")
+        for f in list(self.pending):
+            if re.search(rf"^\s*{f}\s*:", text, re.M | re.I):
+                self.pending.remove(f)
+                self.hit(f.lower())
+
+
+STATE = State()
+
+
+class RunLog:
+    """run.jsonl beside the run's frames (~/deskcap/check-<timestamp>/): every
+    check (with its raw reply), chat, suggestion, rating and button press of
+    the whole run, in every mode — independent of the session recording.
+    Session 2026-10-29 lost 80 minutes of checks, chats and context because
+    "End & rate" was pressed 46 s in and nothing logged after it; the run log
+    is the floor that never stops (recording only adds the dense bundle)."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.path = None                # set in main() once the run dir exists
+
+    def write(self, type_, **kw):
+        if not self.path:
+            return
+        rec = {"ts": datetime.now().isoformat(timespec="milliseconds"), "type": type_,
+               "session": SESSION.dir.name if SESSION.active else None,
+               "session_t": SESSION.t() if SESSION.active else None, **kw}
+        try:
+            with self.lock, open(self.path, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+        except (OSError, TypeError, ValueError) as e:
+            print(f"run log write failed: {e}")
+
+
+RUNLOG = RunLog()
+
+
+class Session:
+    """One recorded session bundle. TESTDEV MODE: recording is always on in
+    live modes — it starts at launch and runs until "End & rate" or server
+    stop, with no timer (the 10-minute consented window is retired; see
+    plans/data-collection-spec.md for the original shape of the bundle)."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.active = False
+        self.dir = None
+        self.started = None             # epoch seconds
+        self.frame_n = 0
+        self.pauses = 0
+        self.style_i = 0
+        self.checks = []                # manifest entries, oldest first
+        self.meta = {}
+        self.last_dense_ms = -10**9     # deskview dense-frame thinning clock
+
+    def size_mb(self):
+        try:
+            return sum(p.stat().st_size for p in self.dir.rglob("*") if p.is_file()) / 1e6
+        except OSError:
+            return 0
+
+    def t(self):
+        return int((time.time() - self.started) * 1000)
+
+    def event(self, type_, runlog=True, **kw):
+        if runlog:                      # the run log hears everything, recording or not
+            RUNLOG.write(type_, **kw)
+        with self.lock:
+            if not self.active:
+                return
+            with open(self.dir / "events.jsonl", "a") as f:
+                f.write(json.dumps({"t": self.t(), "type": type_, **kw}) + "\n")
+
+    def start(self, meta):
+        with self.lock:
+            if self.active:             # already recording: just merge meta
+                self.meta.update(meta)
+                return str(self.dir)
+            self.dir = Path.home() / "deskcap" / ("session-" + datetime.now().strftime("%Y-%m-%d-%H%M%S"))
+            (self.dir / "frames").mkdir(parents=True)
+            (self.dir / "snaps").mkdir()
+            (self.dir / "signal.csv").write_text("t,changed_frac\n")
+            self.started = time.time()
+            self.frame_n = 0
+            self.pauses = 0
+            self.style_i = 0
+            self.checks = []
+            self.meta = meta
+            self.last_dense_ms = -10**9
+            self.active = True
+        self.event("start")
+        print(f"recording: {self.dir}")
+
+        def disk_watch():               # unbounded sessions: say what they cost
+            mydir = self.dir
+            while self.active and self.dir == mydir:
+                time.sleep(600)
+                if self.active and self.dir == mydir:
+                    print(f"recording: {self.t() // 60000} min · {self.size_mb():.0f} MB so far")
+        threading.Thread(target=disk_watch, daemon=True).start()
+        return str(self.dir)
+
+    def dense_due(self):
+        """Dense-frame cadence: every 3 s for the first 10 minutes, every
+        10 s after — a 2-hour class stays in the hundreds of MB, not GB."""
+        t = self.t()
+        with self.lock:
+            if t - self.last_dense_ms < (10000 if t > 600000 else 3000):
+                return False
+            self.last_dense_ms = t
+            return True
+
+    def next_config(self):
+        with self.lock:
+            cfg = SESSION_CONFIGS[self.style_i % len(SESSION_CONFIGS)]
+            self.style_i += 1
+            return cfg
+
+    def manifest(self, ended_by):
+        frames = len(list((self.dir / "frames").glob("*.jpg")))
+        snaps = len(list((self.dir / "snaps").glob("*.jpg")))
+        return {
+            "version": 2,
+            "recording": "always-on-testdev",
+            "started": datetime.utcfromtimestamp(self.started).isoformat() + "Z",
+            "duration_s": round(time.time() - self.started),
+            "ended_by": ended_by,
+            "model": STATE.model,
+            "camera_label": self.meta.get("camera_label", ""),
+            "video_res": self.meta.get("video_res", []),
+            "gating": {"dirty_at": DIRTY_AT, "stable_at": STABLE_AT,
+                       "gate_ms": 250, "dense_ms": 3000, "dense_ms_after_10min": 10000},
+            "counts": {"frames": frames, "snaps": snaps,
+                       "checks": len(self.checks), "pauses": self.pauses},
+            "checks": self.checks,
+            "annotations": {},
+        }
+
+    def end(self, ended_by="user"):
+        with self.lock:
+            if not self.active:
+                return None
+            self.active = False
+        m = self.manifest(ended_by)
+        (self.dir / "session.json").write_text(json.dumps(m, indent=1))
+        RUNLOG.write("session_end", dir=str(self.dir), ended_by=ended_by,
+                     checks=len(self.checks), duration_s=m["duration_s"])
+        size = self.size_mb()
+        print(f"session saved: {self.dir}  ({size:.0f} MB)")
+        print(f"score it:      {HERE / 'tools' / 'score-session.py'} {self.dir}")
+        return {"path": str(self.dir), "mb": round(size),
+                "checks": [{"snap": c["snap"], "check": c["check"], "id": c.get("id"),
+                            "rating": c.get("annotation")} for c in self.checks
+                           if not c.get("skipped")]}
+
+
+SESSION = Session()
+
+
+class Live:
+    """Latest stream frame from deskcap, fanned out to /stream clients."""
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.jpeg = None
+        self.seq = 0
+
+    def set(self, data):
+        with self.cond:
+            self.jpeg = data
+            self.seq += 1
+            self.cond.notify_all()
+
+    def wait_next(self, seq):
+        with self.cond:
+            if self.seq == seq:
+                self.cond.wait(5)
+            return self.jpeg, self.seq
+
+
+LIVE = Live()
+CAP = {"proc": None, "start": None, "stopping": False, "killed": set()}   # deskview capture process
+
+
+def cap_kill():
+    """Stop the running deskcap on purpose (pause / reconnect) — its watcher
+    must treat this exit as intended, not as a crash to report or relaunch."""
+    proc = CAP["proc"]
+    if proc and proc.poll() is None:
+        CAP["killed"].add(proc.pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def stream_reader(stdout):
+    """deskcap --stream emits 4-byte big-endian length + JPEG per frame."""
+    while True:
+        head = stdout.read(4)
+        if len(head) < 4:
+            return
+        n = struct.unpack(">I", head)[0]
+        data = b""
+        while len(data) < n:
+            chunk = stdout.read(n - len(data))
+            if not chunk:
+                return
+            data += chunk
+        LIVE.set(data)
+
+# one check at a time; one waiting slot, newest snap wins, stale snaps drop
+PENDING = []
+PENDING_LOCK = threading.Lock()
+PENDING_EVENT = threading.Event()
+
+
+USER_REASONS = ("asked", "next", "retry")   # student pressed something: never evicted
+
+
+def queue_check(snap_name, reason):
+    if STATE.checks_paused and reason not in USER_REASONS:
+        return                          # Pause checking: only an explicit ask goes out
+    with PENDING_LOCK:
+        if PENDING and PENDING[0][1] in USER_REASONS and reason not in USER_REASONS:
+            return                      # an automatic snap never evicts a user request
+        PENDING[:] = [(snap_name, reason)]
+    PENDING_EVENT.set()
+
+
+def next_check():
+    while True:
+        PENDING_EVENT.wait()
+        with PENDING_LOCK:
+            if PENDING:
+                return PENDING.pop(0)
+            PENDING_EVENT.clear()
+
+
+FIELDS_RE = re.compile(r"\s*(VISIBILITY|WORKING ON|PROBLEM|TALLY|ON PAGE|CHECK|KIND|GRID|EQUATIONS)\s*:\s*(.*)", re.I)
+
+
+def parse_report(text, partial=False):
+    """Split Claude's reply into its fields. With partial=True this is safe to
+    call on a half-streamed reply (used to push CHECK text live over SSE)."""
+    out = {"visibility": None, "visibility_note": "", "working_on": "",
+           "on_page": "", "check": "", "kind": "", "problem": None,
+           "grid": [], "equations": [], "tally": ""}
+    field = None
+    for line in text.splitlines():
+        m = FIELDS_RE.match(line)
+        if m:
+            field = m.group(1).upper()
+            rest = m.group(2)
+            if field == "VISIBILITY":
+                score = re.match(r"\s*(\d+)\s*/\s*10\s*-?\s*(.*)", rest)
+                if score:
+                    out["visibility"] = int(score.group(1))
+                    out["visibility_note"] = score.group(2).strip()
+                else:
+                    out["visibility_note"] = rest.strip()
+            elif field == "WORKING ON":
+                out["working_on"] = rest.strip().strip('"')
+            elif field == "PROBLEM":
+                parts = [p.strip() for p in rest.split("|")]
+                if parts and parts[0]:
+                    out["problem"] = {"label": parts[0].strip('". ').lower(),
+                                      "question": parts[1] if len(parts) > 1 else "",
+                                      "progress": parts[2] if len(parts) > 2 else ""}
+            elif field == "TALLY":
+                t = rest.strip()
+                out["tally"] = "" if t.lower() in ("none", "none.") else t
+            elif field == "ON PAGE":
+                out["on_page"] = rest.strip()
+            elif field == "KIND":
+                k = rest.strip().strip('".').lower()
+                out["kind"] = k if k in ("confirm", "fix", "idle", "setup") else ""
+            elif field == "GRID":
+                pass                    # rows follow on their own lines
+            elif field == "EQUATIONS":
+                if rest.strip().lower().strip(".") == "same":
+                    out["equations_same"] = True    # keep the shown relations (token saver)
+                elif rest.strip() and rest.strip().lower() != "none":
+                    eq, _, name = rest.partition("::")
+                    if eq.strip():
+                        out["equations"].append({"eq": eq.strip(), "name": name.strip()})
+            else:
+                out["check"] = rest.strip()
+        elif field == "ON PAGE":
+            out["on_page"] += "\n" + line
+        elif field == "CHECK":
+            out["check"] += "\n" + line
+        elif field == "GRID":
+            row = line.strip()
+            if re.fullmatch(r"[012]{2,8}", row) and len(out["grid"]) < 8:
+                out["grid"].append(row)
+        elif field == "EQUATIONS":
+            if line.strip() and line.strip().lower().strip(".") not in ("none", "same") \
+                    and len(out["equations"]) < 6:
+                eq, _, name = line.partition("::")
+                if eq.strip():
+                    out["equations"].append({"eq": eq.strip(), "name": name.strip()})
+    out["on_page"], out["check"] = out["on_page"].strip(), out["check"].strip()
+    if partial:
+        return out
+    if not any([out["visibility_note"], out["on_page"], out["check"]]):
+        out["check"] = text.strip()     # model ignored the format: show it anyway
+    if not out["kind"]:                 # degrade gracefully when KIND is missing
+        if (out["visibility"] or 0) <= 3:
+            out["kind"] = "setup"
+        elif "?" not in out["check"] and (out["visibility"] or 0) >= 7:
+            out["kind"] = "confirm"
+        else:
+            out["kind"] = "fix"
+    return out
+
+
+ENHANCED = {}                           # snap path -> tag of the pass already applied
+
+
+def clarify_strong(im):
+    """The 'strong' writing-clarity pass, tuned for faint strokes:
+    1. flatten uneven lighting — subtract a heavily blurred copy of the
+       luminance (page-curvature shading and lamp falloff cancel out, so a
+       later stretch amplifies ink, not shadows);
+    2. histogram-stretch the flattened image (1% clip per end — faint
+       graphite gets the full range, and because shading is already gone
+       this can't turn shadows into black blobs);
+    3. gamma 1.6 — mid-gray strokes darken toward black, paper stays bright;
+    4. mild unsharp (r2, 80%, threshold 3) — crisper stroke edges, the
+       threshold keeps paper grain from haloing.
+    Output is grayscale: for reading handwriting, color is noise."""
+    from PIL import ImageChops, ImageFilter
+    lum = im.convert("L")
+    bg = lum.filter(ImageFilter.GaussianBlur(radius=max(lum.size) // 40))
+    flat = ImageChops.subtract(lum, bg, scale=1.0, offset=215)
+    # clip 8% at the bright end: the page-border glow the subtraction creates
+    # must not hog the range — paper itself should land near white
+    flat = _PILImageOps.autocontrast(flat, cutoff=(1, 8))
+    gamma = flat.point([min(255, round((v / 255) ** 1.6 * 255)) for v in range(256)])
+    sharp = gamma.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+    return sharp.convert("RGB")
+
+
+GATE_SPREAD = 100       # p95-p5 luminance below this = dim/flat frame (report 18)
+
+
+def lum_spread(im):
+    """Global p95 − p5 luminance spread (0–255): the clarity-gate metric."""
+    hist = im.convert("L").histogram()
+    n = max(1, sum(hist))
+
+    def pct(p):
+        acc = 0
+        for v, c in enumerate(hist):
+            acc += c
+            if acc >= n * p:
+                return v
+        return 255
+    return pct(0.95) - pct(0.05)
+
+
+def waterfill(im):
+    """Water-filling illumination flattening (Jung et al., ACCV 2018): the
+    shading surface is the converged water level of an iterative 4-neighbor
+    diffusion over the luminance terrain (eta 0.2, rain delta 0.01 decaying
+    exponentially), run on a 5×-downscaled copy and bicubically upsampled;
+    reconstruct 0.85·I/I_b. Grayscale out, continuous tones — NEVER
+    thresholded (binarization breaks faint strokes). Measured: matches the
+    strong pass's dim-page rescue without thinning bright-page strokes."""
+    g_full = _np.asarray(im.convert("L"), dtype=_np.float64) / 255.0
+    small = im.convert("L").resize(
+        (max(2, im.width // 5), max(2, im.height // 5)), _PILImage.BICUBIC)
+    terrain = _np.asarray(small, dtype=_np.float64) / 255.0
+    eta, delta, n_iter, tau = 0.2, 0.01, 300, 50.0
+    w = terrain.copy()
+    for t in range(n_iter):
+        p = _np.pad(w, 1, mode="edge")
+        lap = (p[:-2, 1:-1] + p[2:, 1:-1] + p[1:-1, :-2] + p[1:-1, 2:]) - 4.0 * w
+        w = w + eta * lap + delta * _np.exp(-t / tau)   # diffusion + decaying rain
+        w = _np.maximum(w, terrain)                     # water never below ground
+    bg_small = _PILImage.fromarray(_np.clip(w * 255.0, 0, 255).astype("uint8"))
+    bg = _np.asarray(bg_small.resize(im.size, _PILImage.BICUBIC),
+                     dtype=_np.float64) / 255.0
+    rec = 0.85 * g_full / _np.maximum(bg, 1e-3)
+    return _PILImage.fromarray(_np.clip(rec * 255.0, 0, 255).astype("uint8")).convert("RGB")
+
+
+def enhance_snap(path, mode):
+    """Clarity-process a stored snap IN PLACE so the thumbnail, the session
+    copy, and what the model reads are the same pixels. mode "auto" is the
+    adaptive gate: a dim/flat frame (p95−p5 spread < 100) gets the waterfill
+    illumination-flattening pass (strong, without numpy), everything else the
+    global histogram stretch — the gate decision is the returned tag, so
+    every check logs it. mode "strong" stays as the manual dev override.
+    Pillow-if-present only — without it this is a clean skip (live-mode
+    snaps are processed on the browser canvas instead and never come through
+    here). Returns the tag of the applied pass, or None."""
+    if not PIL_OK or mode not in ("auto", "strong"):
+        return None
+    with STATE.lock:
+        if path in ENHANCED:
+            return ENHANCED[path]       # never double-process one frame
+        ENHANCED[path] = "pending"
+    try:
+        im = _PILImage.open(path)
+        im = _PILImageOps.exif_transpose(im)
+        if mode == "strong":
+            out, tag = clarify_strong(im), "pillow-strong"
+        elif lum_spread(im) < GATE_SPREAD:              # the adaptive gate fires
+            if NUMPY_OK:
+                out, tag = waterfill(im), "pillow-waterfill"
+            else:
+                out, tag = clarify_strong(im), "pillow-strong"
+        else:
+            out, tag = _PILImageOps.autocontrast(im.convert("RGB"), cutoff=1), "pillow-auto"
+        out.save(path, "JPEG", quality=88)
+        with STATE.lock:
+            ENHANCED[path] = tag
+        return tag
+    except Exception as e:
+        print(f"contrast skip ({Path(path).name}): {e}")
+        with STATE.lock:
+            ENHANCED.pop(path, None)
+        return None
+
+
+HAND_HOLD_S = 15        # a resting hand never blocks checks longer than this
+HAND = {"floor": None}  # adaptive skin-tone floor (a wood desk reads as skin)
+
+
+def hand_in_frame(path):
+    """Cheap skin-tone test on a thumbnail: is a hand/arm over the page?
+    57/70 corpus checks were shot through a hand — automatic snaps now wait
+    for a hand-free stable frame (with a timeout). Adaptive floor: the
+    quietest frame seen defines "no hand" (warm desks read as skin at a
+    constant rate) and only a clear rise above it counts; the floor drifts
+    up slowly so a permanently resting hand becomes the new normal.
+    Pillow-if-present; without it, never holds."""
+    if not PIL_OK:
+        return False
+    try:
+        im = _PILImage.open(path).convert("RGB").resize((160, 120))
+        b = im.tobytes()                    # getdata() is deprecated in Pillow 12
+        px = list(zip(b[0::3], b[1::3], b[2::3]))
+        skin = sum(1 for r, g, b in px
+                   if r > 95 and g > 40 and b > 20 and r > g + 15 and r > b + 15)
+        frac = skin / len(px)
+    except Exception:
+        return False
+    floor = HAND["floor"]
+    if floor is None or frac < floor:
+        HAND["floor"] = frac
+    else:
+        HAND["floor"] = min(floor + 0.0005, frac)
+    return frac > HAND["floor"] + 0.03
+
+
+NO_PAGE_AT = 0.12       # paper fraction below this = no page in frame (skip the call)
+
+
+def paper_frac(path):
+    """Fraction of a thumbnail that looks like paper: bright and nearly
+    colorless. Measured 2026-10-29 against the model's own VISIBILITY on 190
+    live checks: every frame under 0.15 was one the model scored 0-2/10 (a
+    lap, a shirt, a sleeve on the lens), and 403 frames of real pages across
+    the five labeled core sessions never scored below 0.339 — so NO_PAGE_AT
+    0.12 sits far from any readable page while catching ~25% of a run's
+    calls (tools/eval-no-page.py re-runs the measurement). Pillow-if-present;
+    without it, returns None and nothing is ever skipped."""
+    if not PIL_OK:
+        return None
+    try:
+        im = _PILImage.open(path).convert("RGB").resize((160, 120))
+        b = im.tobytes()                    # getdata() is deprecated in Pillow 12
+        px = list(zip(b[0::3], b[1::3], b[2::3]))
+        return sum(1 for r, g, b in px if min(r, g, b) > 120 and max(r, g, b) - min(r, g, b) < 45) / len(px)
+    except Exception:
+        return None
+
+
+def shrink_for_model(path, width=1280):
+    """What the model reads is a downscaled copy (cheaper tokens, no measured
+    quality loss in experiments/run1); the original stays on disk as ground
+    truth. Falls back to the original if sips is unavailable."""
+    if width >= 1920:
+        return path
+    small = path.with_name(f"{path.stem}-w{width}.jpg")
+    r = subprocess.run(["sips", "--resampleWidth", str(width), str(path), "--out", str(small)],
+                       capture_output=True)
+    return small if r.returncode == 0 and small.exists() else path
+
+
+def img_block(path):
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                        "data": base64.b64encode(Path(path).read_bytes()).decode()}}
+
+
+def crop_for_anchor(path, x, y, frac=0.38):
+    """Full-res close-up around a pen-point (x, y as 0-1 fractions), via sips.
+    Returns the crop path or None — callers treat the crop as best-effort."""
+    try:
+        r = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
+                           capture_output=True, text=True, timeout=10)
+        dims = dict(re.findall(r"(pixelWidth|pixelHeight):\s*(\d+)", r.stdout))
+        w, h = int(dims["pixelWidth"]), int(dims["pixelHeight"])
+        cw, ch = int(w * frac), int(h * frac)
+        ox = min(max(int(x * w) - cw // 2, 0), w - cw)
+        oy = min(max(int(y * h) - ch // 2, 0), h - ch)
+        out = Path(path).with_name(f"{Path(path).stem}-crop.jpg")
+        r = subprocess.run(["sips", "--cropOffset", str(oy), str(ox),
+                            "--cropToHeightWidth", str(ch), str(cw), str(path), "--out", str(out)],
+                           capture_output=True, timeout=10)
+        return out if r.returncode == 0 and out.exists() else None
+    except Exception:
+        return None
+
+
+def anchor_region(x, y):
+    col = ["left", "middle", "right"][min(int(x * 3), 2)]
+    row = ["top", "center", "bottom"][min(int(y * 3), 2)]
+    return f"{row} {col}" if (row, col) != ("center", "middle") else "center"
+
+
+class _Skip(Exception):
+    """A check answered locally (no page in view): no model call is made."""
+
+
+class FirstTokenTimeout(RuntimeError):
+    """No first token within the watchdog window — the call was killed so the
+    caller can retry instead of sitting out a 39-second outlier."""
+
+
+def claude_stream(blocks, model, on_text=None, timeout=120, first_timeout=None):
+    """One streaming `claude` call: content blocks in (text + base64 images),
+    text streamed out. on_text(full_text_so_far) fires per delta. Returns
+    (text, first_token_s). Thinking is disabled — it cost ~55 s per check.
+    first_timeout (seconds): kill and raise FirstTokenTimeout if the model
+    has produced nothing by then — callers retry once (outlier guard)."""
+    msg = {"type": "user", "message": {"role": "user", "content": blocks}}
+    env = {**os.environ, "MAX_THINKING_TOKENS": "0"}
+    cmd = ["claude", "-p", "--model", model, "--input-format", "stream-json",
+           "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, env=env)
+    killer = threading.Timer(timeout, p.kill)
+    killer.start()
+    got_first = threading.Event()
+    hung = {"fired": False}
+
+    def watchdog():
+        if not got_first.is_set():
+            hung["fired"] = True
+            p.kill()
+    ft_killer = threading.Timer(first_timeout, watchdog) if first_timeout else None
+    if ft_killer:
+        ft_killer.start()
+    t0 = time.time()
+    text, first, err = "", None, ""
+    try:
+        p.stdin.write(json.dumps(msg) + "\n")
+        p.stdin.close()
+        for line in p.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "stream_event":
+                d = ev["event"].get("delta") or {}
+                if d.get("type") == "text_delta":
+                    if first is None:
+                        first = time.time() - t0
+                        got_first.set()
+                    text += d["text"]
+                    if on_text:
+                        on_text(text)
+            elif ev.get("type") == "result" and ev.get("is_error"):
+                err = str(ev.get("result", ""))[:300]
+    finally:
+        killer.cancel()
+        if ft_killer:
+            ft_killer.cancel()
+        try:
+            err = err or p.stderr.read()[:300].strip()
+        except Exception:
+            pass
+        p.wait()
+    if hung["fired"] and not text.strip():
+        raise FirstTokenTimeout(f"no first token in {first_timeout}s")
+    if not text.strip():
+        raise RuntimeError(err or "no response from claude")
+    return text, first
+
+
+STOPWORDS = frozenset(
+    "a an and are at be but by do does for from had has have how i if in is it its me my of on or "
+    "so that the their then there this to was we what when where which why will with you your".split())
+
+
+def advice_toks(text):
+    """Content-word token set, for advice-dedup and dispute similarity."""
+    return {w for w in re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split()
+            if w not in STOPWORDS}
+
+
+def tok_sim(a, b):
+    """Similarity of two content-word sets: Jaccard, or the overlap
+    coefficient when one phrasing is a tightened rewording of the other
+    (paraphrases keep the content words and shed the connective tissue)."""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    return max(inter / len(a | b), inter / min(len(a), len(b)) * 0.8)
+
+
+CANT_READ_RE = re.compile(
+    r"too (faint|small|blurry|fine|tiny)|can'?t (read|make out|resolve|verify)|"
+    r"cannot (read|make out|resolve|verify)|unreadable|illegible|"
+    r"not (readable|legible)|hard to (read|make out)", re.I)
+
+RE_READ_RE = re.compile(
+    r"\bre-?read\b|read (it|that|them|the \w+) again|look again|"
+    r"double-?check|check (it|that|the \w+) again", re.I)
+
+NOTHING_NEW_RE = re.compile(
+    r"\b(nothing new|no new (handwriting|writing|work|ink|answers?)|"
+    r"same (work|page|writing) as before|no (visible )?changes? since|"
+    r"blank (printed )?(worksheet|page)|hasn'?t (written|started)|"
+    r"no (student )?(work|answers?|handwriting) (is |has been )?(yet )?(visible|written))", re.I)
+
+
+def guard_check(entry, reason):
+    """Post-parse trust guards (called under STATE.lock).
+
+    Nothing-new guard: a note that references no new ink never becomes a
+    dialogue card - it is demoted to the quiet line; and a "nothing new"
+    claim on a snap that was taken BECAUSE the page-change signal fired is
+    a misfire - suppressed outright and logged (the diff that triggered
+    the snap is the ground truth that something changed).
+
+    Advice dedup: the said-it-already registry. The same advice (content-
+    word similarity >= 0.6 against what was already said on this problem)
+    is delivered at most twice; from the second delivery the next check's
+    prompt carries an escalate-or-concede order (REPEAT_NOTE), and a third
+    identical nudge is suppressed server-side to a quiet ack. Fifteen
+    identical nudges (session 194928) must be impossible.
+    """
+    label = (entry.get("problem") or STATE.problem or {}).get("label")
+    text = entry.get("check") or ""
+    # can't-resolve ledger: two checks in a row that flag an unreadable fact
+    # on the same problem arm a zoomed re-read for the next check (2.6)
+    if label:
+        if CANT_READ_RE.search(f"{entry.get('visibility_note') or ''} {text}"):
+            STATE.cant_resolve[label] = STATE.cant_resolve.get(label, 0) + 1
+        else:
+            STATE.cant_resolve[label] = 0
+    claims_nothing = bool(NOTHING_NEW_RE.search(text)) or \
+        (entry.get("working_on") or "").strip().lower() == "nothing new"
+    if claims_nothing and reason in ("page settled", "checking in"):
+        entry["suppressed"] = "misfire"
+        entry["kind"] = "idle"
+        entry["check"] = ""
+        STATE.misfires += 1
+        SESSION.event("nothing_new_misfire", snap=entry.get("snap"),
+                      reason=reason, said=text[:160])
+        print(f"suppressed misfire ({entry.get('snap')}): \"nothing new\" on a page the diff saw change")
+        return
+    if entry.get("kind") in ("confirm", "fix") and claims_nothing \
+            and reason not in USER_REASONS and reason != "stuck?":
+        entry["suppressed"] = "nothing-new"
+        entry["kind"] = "idle"          # quiet line at most, never a note card
+    if entry.get("kind") == "fix" and label and text:
+        toks = advice_toks(text)
+        log = STATE.advice_log.setdefault(label, [])
+        # 0.5: a confirm+question note shares only ~half its content words
+        # with its own reworded repeat (measured on live repeats) - the
+        # paraphrase family must still register
+        hit = next((e for e in log if tok_sim(toks, e["toks"]) >= 0.5), None)
+        if hit is None:
+            log.append({"toks": toks, "text": text, "n": 1})
+        else:
+            hit["n"] += 1
+            hit["toks"] |= toks         # the paraphrase family grows with each variant
+            entry["repeat_n"] = hit["n"]
+            # a third identical nudge is forbidden (a user-requested check is
+            # never left empty-handed - the ladder escalates it prompt-side)
+            if hit["n"] >= 3 and reason not in USER_REASONS:
+                entry["suppressed"] = "repeat"
+                entry["kind"] = "idle"
+                entry["check"] = f"still on {label} - the earlier note stands"
+                SESSION.event("advice_suppressed", n=hit["n"], said=text[:160])
+                print(f"suppressed repeat x{hit['n']} ({label}): {text[:60]}")
+
+
+def fmt_problem(p):
+    if not p:
+        return "(not identified yet)"
+    return f"{p.get('label', '?')} - {p.get('question', '')} (progress: {p.get('progress', '')})"
+
+
+def fmt_thread(msgs, n=8):
+    return "\n".join(f"{'Student' if m['who'] == 'you' else 'You'}: {m['text']}"
+                     for m in msgs[-n:])
+
+
+def build_context():
+    """Everything the model remembers, under STATE.lock."""
+    thread = STATE.thread()
+    tblock = THREAD_BLOCK.format(lines=fmt_thread(thread)) if thread else ""
+    if not (STATE.last_on_page or STATE.last_checks or STATE.problem):
+        return ""
+    label = (STATE.problem or {}).get("label")
+    advice = STATE.advice_log.get(label, [])
+    ablock = ADVICE_BLOCK.format(lines="\n".join(
+        f"- {e['text']}" + (f" (said {e['n']} times)" if e["n"] > 1 else "")
+        for e in advice[-6:])) if advice else ""
+    return CONTEXT_BLOCK.format(
+        problem=fmt_problem(STATE.problem),
+        questions=QUESTIONS_BLOCK.format(qlist="\n".join(
+            f"- {k}: {v}" for k, v in STATE.questions.items())) if STATE.questions else "",
+        pin_note=PIN_NOTE.format(pin=STATE.pinned_label) if STATE.pinned_label else "",
+        last_on_page=STATE.last_on_page[:1200] or "(none yet)",
+        last_checks="\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)",
+        advice=ablock + (ANSWERED_NOTE if STATE.answered.get(label) else ""),
+        thread=tblock,
+    )
+
+
+def absorb_twin(entry, snap, next_from=None):
+    """Fold a finished check's structured fields into the twin. Under lock."""
+    if entry.get("grid"):
+        STATE.grid = entry["grid"]
+        STATE.grid_snap = snap
+        STATE.grid_time = entry["time"]
+    if entry.get("kind") == "setup":
+        return                          # unreadable frame: keep card + equations
+    p = entry.get("problem")
+    prev_label = (STATE.problem or {}).get("label")
+    accepted = True                     # does this check's PROBLEM stand?
+    if p and p.get("label"):
+        label = p["label"]
+        if label in STATE.questions:
+            # the registry is ground truth: occlusion or a re-read never
+            # rewords a question we already know (Yao: a hand over the sheet
+            # is not evidence the question changed)
+            p = {**p, "question": STATE.questions[label]}
+        elif p.get("question") and (entry.get("visibility") or 0) >= 5:
+            STATE.questions[label] = p["question"]      # new question discovered
+        if next_from and label != next_from:
+            # Next: pin the newly identified problem so routine re-reads of the
+            # page (whose freshest work is still the OLD problem) can't snap
+            # the card back. The pin dissolves when writing genuinely moves.
+            STATE.pinned_label, STATE.pinned_from = label, next_from
+            STATE.problem = p
+        elif STATE.pinned_label and not next_from:
+            if label == STATE.pinned_label:
+                STATE.problem = p       # progress on the pinned problem
+            elif label == STATE.pinned_from:
+                accepted = False        # snap-back to the problem the student left
+            else:                       # writing moved somewhere new: pin dissolves
+                STATE.problem = p
+                STATE.pinned_label = STATE.pinned_from = None
+        else:
+            STATE.problem = p
+    # equations describe the check's PROBLEM: a rejected snap-back must not
+    # leave the pinned card wearing the old problem's relations
+    if accepted and entry.get("equations"):
+        STATE.equations = entry["equations"]
+    elif accepted and entry.get("equations_same") and p and p.get("label") != prev_label:
+        STATE.equations = []            # "same" on a different problem: never show stale relations
+    if entry.get("on_page"):
+        # sticky transcription: a re-read of an unchanged line never re-rolls
+        # its surface form - if the new reading matches the previous one up
+        # to case, spacing, and equivalent glyphs (·/•/×/* for multiplication,
+        # unicode minus), the previous reading persists verbatim
+        def normline(l):
+            l = l.translate({0xB7: "*", 0x2022: "*", 0xD7: "*", 0x22C5: "*", 0x2212: "-"})
+            return re.sub(r"\s+", " ", l).strip().lower()
+        old = {normline(l): l.strip()
+               for l in STATE.last_on_page.splitlines() if l.strip()}
+        lines = [old.get(normline(l), l.strip())
+                 for l in entry["on_page"].splitlines() if l.strip()]
+        entry["on_page"] = "\n".join(lines)
+        STATE.last_on_page = entry["on_page"]
+
+
+def checker(frames_dir):
+    while True:
+        snap, reason = next_check()
+        with STATE.lock:
+            STATE.checking_n += 1
+            STATE.status = "checking"
+            STATE.msg_id += 1
+            cid = STATE.msg_id
+            context = build_context()
+            next_from = STATE.next_from if reason == "next" else None
+            if reason == "next":
+                STATE.next_from = None
+            if reason == "asked" and STATE.problem:
+                label = STATE.problem["label"]
+                STATE.asks[label] = STATE.asks.get(label, 0) + 1
+            cur_label = (STATE.problem or {}).get("label")
+            # advice given twice and not acted on: the next check must escalate
+            # or concede, never restate (the perception-dispute protocol's
+            # non-compliance arm — see also guard_check)
+            repeat_hot = any(e["n"] >= 2 for e in STATE.advice_log.get(cur_label, []))
+            disputed = STATE.disputes.get(cur_label, False)
+            # the dispute and the can't-resolve ledger each buy ONE zoomed
+            # re-read: a full-res close-up of the unreadable grid region (or
+            # the full-res frame) rides along as a second image (2.1, 2.6)
+            cant = cur_label is not None and STATE.cant_resolve.get(cur_label, 0) >= 2
+            needs_zoom = disputed or cant
+            if disputed:
+                STATE.disputes[cur_label] = False
+            if cant:
+                STATE.cant_resolve[cur_label] = 0
+            grid_ones = [(r, c, len(row), len(STATE.grid))
+                         for r, row in enumerate(STATE.grid)
+                         for c, d in enumerate(row) if d == "1"] if needs_zoom else []
+        in_session = SESSION.active
+        cfg = SESSION.next_config() if in_session else \
+            {"style": "question", "structure": "stream", "width": 1280}
+        if reason == "stuck?":
+            cfg = {**cfg, "style": "next-step"}
+        t = SESSION.t() if in_session else None
+        entry = {"time": datetime.now().strftime("%H:%M"), "snap": snap,
+                 "reason": reason, "id": cid}
+        EVENTS.emit(type="check_start", id=cid, snap=snap, reason=reason)
+        st = Stages(cid, "check")
+        t0 = time.time()
+        raw, first = "", None
+        extra = ESCALATION if reason == "asked" else \
+                STUCK_NOTE if reason == "stuck?" else \
+                NEXT_NOTE.format(label=next_from or "the current problem") if reason == "next" else ""
+        if repeat_hot or disputed:
+            extra += REPEAT_NOTE
+        last_push = [0.0]
+
+        def push(text):                 # stream partial CHECK text to the browser
+            st.scan(text)               # stage strip: mark sections as they appear
+            now = time.time()
+            done = "\nKIND" in text
+            if not done and now - last_push[0] < 0.12:
+                return
+            last_push[0] = now
+            p = parse_report(text, partial=True)
+            if p["check"] or p["problem"]:
+                EVENTS.emit(type="check_partial", id=cid, check=p["check"],
+                            problem=p["problem"], visibility=p["visibility"],
+                            working_on=p["working_on"])
+        # no page in frame (a lap, a shirt, a sleeve on the lens): an automatic
+        # check is answered locally - 62 of 147 checks in run 2026-10-29 went to
+        # opus to be told "lay the sheet flat". A student's own ask still goes out.
+        frac = paper_frac(frames_dir / snap) if reason not in USER_REASONS else None
+        if frac is not None and frac < NO_PAGE_AT:
+            entry.update(visibility=None, visibility_note="no page in view", on_page="",
+                         kind="setup", skipped="no-page", paper=round(frac, 3),
+                         check="No page in view - lay your sheet flat under the camera.")
+            with STATE.lock:
+                STATE.no_page += 1
+            st.hit("skipped")
+        try:
+            if entry.get("skipped"):
+                raise _Skip
+            with STATE.lock:
+                cmode, mode = STATE.contrast, STATE.mode
+                client_enh = STATE.snap_enh.get(snap)
+            if cmode == "off":
+                entry["contrast"] = "off"
+            elif mode == "live":        # browser processed it on the canvas pre-upload
+                entry["contrast"] = f"canvas-{client_enh}" if client_enh else "skip"
+            else:                       # deskview/replay: process the stored file itself
+                entry["contrast"] = enhance_snap(frames_dir / snap, cmode) or "skip"
+            st.hit("contrast")
+            send = shrink_for_model(frames_dir / snap, cfg["width"])
+            zoom = None
+            if needs_zoom:              # one full-res re-read of the contested region
+                if grid_ones:
+                    x = sum((c + 0.5) / cols for _, c, cols, _ in grid_ones) / len(grid_ones)
+                    y = sum((r + 0.5) / rows for r, _, _, rows in grid_ones) / len(grid_ones)
+                    zoom = crop_for_anchor(frames_dir / snap, x, y, frac=0.5)
+                if zoom is None:
+                    zoom = frames_dir / snap        # no map to aim with: full-res frame
+                extra += ZOOM_NOTE
+                entry["zoom"] = "crop" if zoom != frames_dir / snap else "full"
+                st.hit("zoom")
+            st.hit("sent")
+            prompt = PROMPT.format(context=context,
+                                   check_style=CHECK_STYLES[cfg["style"]],
+                                   no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
+                                   escalation=extra)
+            blocks = [{"type": "text", "text": prompt}, img_block(send)]
+            if zoom:
+                blocks.append(img_block(zoom))
+            try:                        # outlier guard: a silent 20 s is a retry, not a wait
+                raw, first = claude_stream(blocks, STATE.model, on_text=push,
+                                           first_timeout=20)
+            except FirstTokenTimeout:
+                entry["retried"] = True
+                print(f"check {snap}: no first token in 20s — killed and retrying")
+                raw, first = claude_stream(blocks, STATE.model, on_text=push)
+            entry.update(parse_report(raw))
+            with STATE.lock:            # remember what we saw and said
+                guard_check(entry, reason)      # trust guards: dedup + nothing-new
+                absorb_twin(entry, snap, next_from=next_from)
+                if entry.get("check") and entry.get("kind") in ("confirm", "fix"):
+                    STATE.last_checks = (STATE.last_checks + [entry["check"]])[-3:]
+                    label = (entry.get("problem") or STATE.problem or {}).get("label")
+                    if label:
+                        entry["problem_label"] = label
+                        STATE.threads.setdefault(label, []).append(
+                            {"who": "cono", "text": entry["check"], "time": entry["time"],
+                             "kind": entry["kind"], "snap": snap, "id": cid})
+        except _Skip:
+            print(f"check {snap} ({reason}): no page in view (paper {entry['paper']}) - not sent")
+        except Exception as e:
+            entry.update(visibility=None, visibility_note="", on_page="", failed=True,
+                         check="Couldn't read this snapshot. Check that `claude` runs "
+                               "in your terminal, then retry.")
+            print(f"check failed: {e}")
+        st.hit("done")
+        entry["stages"] = st.list
+        latency = int((time.time() - t0) * 1000)
+        entry["ms"] = latency           # dev mode shows per-check latency
+        first_ms = int(first * 1000) if first else None
+        print(f"check {snap} ({reason}): first text "
+              f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")
+        recording = in_session and SESSION.active
+        if recording:
+            try:
+                shutil.copy(frames_dir / snap, SESSION.dir / "snaps" / snap)
+            except OSError:
+                pass
+        # the config dict is what score/correlation tooling keys on: it must
+        # carry EVERYTHING that varied or could vary per check - style,
+        # width, model, thinking, and the clarity pass actually applied
+        # (report 14 found zero contrast data because the tag lived only
+        # beside the config, where the analysis never looked)
+        record = {"t": t, "id": cid, "snap": snap, "reason": reason,
+                  "config": {**cfg, "model": STATE.model,
+                             "thinking": "off",   # claude_stream pins MAX_THINKING_TOKENS=0
+                             "contrast": entry.get("contrast", "off")},
+                  "style": cfg["style"], "latency_ms": latency,
+                  "first_token_ms": first_ms,
+                  "contrast": entry.get("contrast", "off"),
+                  "stages": entry.get("stages", []),
+                  "problem": (entry.get("problem") or {}).get("label", ""),
+                  "visibility": entry.get("visibility"),
+                  "suppressed": entry.get("suppressed"),
+                  "repeat_n": entry.get("repeat_n"),
+                  "zoom": entry.get("zoom"),
+                  "skipped": entry.get("skipped"),
+                  "kind": entry.get("kind", ""),
+                  "retried": entry.get("retried", False),
+                  "on_page": entry.get("on_page", ""), "check": entry.get("check", ""),
+                  "raw": raw, "annotation": None}
+        RUNLOG.write("check", **{k: v for k, v in record.items() if k != "t"})
+        if recording:
+            with SESSION.lock:
+                SESSION.checks.append(record)
+            SESSION.event("check_done", runlog=False,   # the run log has the full record
+                          snap=snap, reason=reason, config=cfg,
+                          latency_ms=latency, first_token_ms=first_ms,
+                          visibility=entry.get("visibility"))
+        with STATE.lock:
+            STATE.checks.insert(0, entry)
+            STATE.checking_n -= 1
+            if STATE.checking_n <= 0:
+                STATE.status = "watching"
+        EVENTS.emit(type="check_done", id=cid, snap=snap)
+
+
+def run_chat(cid, text, anchor, frames_dir, intent=None):
+    """One typed (or pen-pointed) student message → one streamed reply."""
+    now = datetime.now().strftime("%H:%M")
+    tag = anchor and (anchor_region(anchor["x"], anchor["y"]) if anchor["kind"] == "region"
+                      else anchor["text"][:28] + ("…" if len(anchor["text"]) > 28 else ""))
+    with STATE.lock:
+        label = (STATE.problem or {}).get("label") or "page"
+        STATE.asks[label] = STATE.asks.get(label, 0) + 1
+        asks = STATE.asks[label]
+        shown = text + (f"  ⌖ {tag}" if tag else "")
+        earlier = STATE.threads.get(label, [])
+        # perception-dispute detection (2.1): the student re-asserting the same
+        # point (content-word overlap with their own earlier messages), or
+        # coming back after being told to re-read something, is a dispute -
+        # the reply gets a full-res re-read and explicit permission to concede
+        prev_you = [m["text"] for m in earlier if m["who"] == "you"][-3:]
+        last_cono = next((m["text"] for m in reversed(earlier) if m["who"] == "cono"), "")
+        toks = advice_toks(text)
+        dispute = any(tok_sim(toks, advice_toks(p)) >= 0.4 for p in prev_you) \
+            or bool(RE_READ_RE.search(last_cono))
+        if dispute:
+            STATE.disputes[label] = True    # the next check concedes too
+        STATE.threads.setdefault(label, []).append(
+            {"who": "you", "text": shown, "time": now, "kind": "chat", "snap": None, "id": cid})
+        problem = fmt_problem(STATE.problem)
+        on_page = STATE.last_on_page[:1200] or "(none yet)"
+        notes = "\n".join(f"- {c}" for c in STATE.last_checks[-2:]) or "(none yet)"
+        thread = fmt_thread(STATE.threads[label][:-1]) or "(none yet)"
+        img = STATE.latest_img or STATE.frame
+    t0 = time.time()
+    EVENTS.emit(type="chat_start", id=cid)
+    st = Stages(cid, "chat")
+
+    def push(t):
+        st.hit("first word")
+        EVENTS.emit(type="chat_partial", id=cid, text=t)
+    anchor_note, blocks = "", []
+    try:
+        if anchor and anchor["kind"] != "region":
+            anchor_note = ANCHOR_NOTES[anchor["kind"]].format(text=anchor["text"])
+        if img and (frames_dir / img).exists():
+            blocks = [img_block(shrink_for_model(frames_dir / img, 1280))]
+            if anchor and anchor["kind"] == "region":
+                crop = crop_for_anchor(frames_dir / img, anchor["x"], anchor["y"])
+                st.hit("crop")
+                anchor_note = ANCHOR_NOTES["region"].format(
+                    text=anchor_region(anchor["x"], anchor["y"]),
+                    crop=" (a full-resolution close-up of that spot is the second image)"
+                         if crop else "")
+                if crop:
+                    blocks.append(img_block(crop))
+            elif dispute or intent:     # disputed reading / page scan: full resolution
+                blocks.append(img_block(frames_dir / img))
+                st.hit("zoom")
+        if dispute:
+            anchor_note += DISPUTE_NOTE
+            SESSION.event("dispute", text=text[:160], problem=label)
+            print(f"dispute ({label}): full-res re-read armed")
+        prompt = CHAT_PROMPT.format(anchor_note=anchor_note, problem=problem,
+                                    last_on_page=on_page, last_checks=notes,
+                                    thread=thread, asks=asks, text=text,
+                                    intent_note=CHAT_INTENTS[intent][1] if intent else "")
+        st.hit("sent")
+        try:                            # outlier guard: silent 20 s → one retry
+            raw, first = claude_stream([{"type": "text", "text": prompt}] + blocks,
+                                       STATE.model, on_text=push, first_timeout=20)
+        except FirstTokenTimeout:
+            print("chat: no first token in 20s — killed and retrying")
+            raw, first = claude_stream([{"type": "text", "text": prompt}] + blocks,
+                                       STATE.model, on_text=push)
+        reply = raw.strip()
+    except Exception as e:
+        reply = "Couldn't answer that one — check that `claude` runs in your terminal, then ask again."
+        first = None
+        print(f"chat failed: {e}")
+    st.hit("done")
+    latency = int((time.time() - t0) * 1000)
+    first_ms = int(first * 1000) if first else None
+    with STATE.lock:
+        STATE.threads.setdefault(label, []).append(
+            {"who": "cono", "text": reply, "time": datetime.now().strftime("%H:%M"),
+             "kind": "chat", "snap": img, "id": cid})
+        STATE.last_checks = (STATE.last_checks + [reply])[-3:]
+        # the ladder's top rung ends with the explain-back offer: from here
+        # on, checks verify against the given answer instead of re-hinting
+        # (2026-10-29: a check re-hinted 114a 20 s after chat gave the answer)
+        if label != "page" and "explain it back" in reply.lower():
+            STATE.answered[label] = True
+    SESSION.event("chat_done", id=cid, problem=label, intent=intent, text=text, anchor=anchor, reply=reply,
+                  asks=asks, latency_ms=latency, first_token_ms=first_ms,
+                  stages=st.list)
+    EVENTS.emit(type="chat_done", id=cid)
+    print(f"chat ({label}, ask #{asks}): first text "
+          f"{f'{first_ms / 1000:.1f}s' if first_ms else '—'} · done {latency / 1000:.1f}s")
+
+
+def watcher(log_path, frames_dir):
+    """Replay and deskview modes: tail the capture log and gate like the
+    browser does. In deskview mode this thread also records the session
+    bundle (dense frames + gating signal) since no client camera exists."""
+    seen = 0
+    dirty = False
+    dirty_since = 0.0
+    last_queued = 0.0
+    last_active = 0.0
+    stuck_armed = False
+    first_done = False
+    hold_since = 0.0                    # hand-aware snap hold (batch 1)
+    while True:
+        rows = []
+        if log_path.exists():
+            with open(log_path, newline="") as f:
+                rows = [r for r in csv.DictReader(f) if r.get("file")]
+        if len(rows) < seen:            # deskcap was restarted and rewrote its log
+            seen = 0
+        for row in rows[seen:]:
+            try:
+                changed = float(row["changed_frac"]) if row["changed_frac"] else None
+            except (ValueError, KeyError):
+                changed = None
+            with STATE.lock:
+                STATE.frame = row["file"]
+                STATE.frame_n += 1
+                asap = STATE.check_asap
+                STATE.check_asap = False
+            if SESSION.active and STATE.mode == "deskview":
+                if SESSION.dense_due():
+                    with SESSION.lock:
+                        SESSION.frame_n += 1
+                        dense = f"frame-{SESSION.frame_n:04d}.jpg"
+                    try:
+                        shutil.copy(frames_dir / row["file"], SESSION.dir / "frames" / dense)
+                    except OSError:
+                        pass
+                if changed is not None:
+                    with SESSION.lock:
+                        with open(SESSION.dir / "signal.csv", "a") as f:
+                            f.write(f"{SESSION.t()},{changed:.4f}\n")
+            now = time.time()
+            if changed is not None and changed > DIRTY_AT:
+                if not dirty:
+                    dirty_since = now
+                dirty = True
+                last_active = now
+                stuck_armed = True      # one nudge per writing burst
+            settled = changed is not None and changed < STABLE_AT
+            overdue = dirty and now - dirty_since > MAX_DIRTY_S
+            gap_ok = now - last_queued >= MIN_GAP_S
+            if asap or not first_done or (dirty and (settled or overdue) and gap_ok):
+                reason = ("asked" if asap else "first look" if not first_done
+                          else "page settled" if settled else "checking in")
+                # hand-aware hold: an automatic snap waits for a hand-free
+                # stable frame — but never longer than HAND_HOLD_S (a resting
+                # hand must not block checks forever)
+                if reason in ("page settled", "checking in") \
+                        and hand_in_frame(frames_dir / row["file"]):
+                    if not hold_since:
+                        hold_since = now
+                    if now - hold_since < HAND_HOLD_S:
+                        continue        # stay dirty: a later clean frame snaps
+                hold_since = 0.0
+                queue_check(row["file"], reason)
+                first_done, dirty, last_queued = True, False, now
+            elif stuck_armed and first_done and not dirty \
+                    and not (STATE.cap_paused or STATE.cap_waiting) \
+                    and now - max(last_active, last_queued) > STUCK_S:
+                queue_check(row["file"], "stuck?")
+                stuck_armed, last_queued = False, now
+        seen = len(rows)
+        time.sleep(1)
+
+
+def replay(src, dst):
+    """Feed a recorded session into the live dir, one frame per 1.5 s."""
+    with open(src / "log.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    with open(dst / "log.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=rows[0].keys())
+        w.writeheader()
+        f.flush()
+        for row in rows:
+            if row.get("file"):
+                shutil.copy(src / row["file"], dst / row["file"])
+            w.writerow(row)
+            f.flush()
+            time.sleep(1.5)
+
+
+class Handler(BaseHTTPRequestHandler):
+    frames_dir = None
+
+    def log_message(self, *a):  # keep the terminal quiet
+        pass
+
+    def send(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path == "/":
+            self.send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
+        elif path == "/state":
+            self.send(200, json.dumps(STATE.snapshot()).encode(), "application/json")
+        elif path.startswith("/snap/"):
+            p = self.frames_dir / Path(path[len("/snap/"):]).name   # no traversal
+            if p.exists() and p.suffix == ".jpg":
+                self.send(200, p.read_bytes(), "image/jpeg")
+            else:
+                self.send(404, b"no snap", "text/plain")
+        elif path == "/events":                      # SSE: streamed check/chat text
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            q = EVENTS.register()
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=15)
+                        self.wfile.write(b"data: " + data.encode() + b"\n\n")
+                    except queue.Empty:
+                        self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+            finally:
+                EVENTS.unregister(q)
+        elif path == "/stream":                      # MJPEG live view (deskview mode)
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=conoframe")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            seq = 0
+            idle = 0
+            try:
+                while idle < 120:                    # no frame ever: give up after ~10 min
+                    jpeg, nseq = LIVE.wait_next(seq)
+                    if jpeg is None:
+                        idle += 1
+                        continue
+                    # A camera that has gone away sends nothing; re-sending the last
+                    # frame keeps the browser's stream open (and detects a closed tab)
+                    # so the picture resumes by itself when the camera is back.
+                    idle = 0
+                    seq = nseq
+                    self.wfile.write(b"--conoframe\r\nContent-Type: image/jpeg\r\n"
+                                     b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                                     + jpeg + b"\r\n")
+            except (BrokenPipeError, ConnectionResetError):
+                return
+        elif path == "/live.jpg":
+            with LIVE.cond:
+                j = LIVE.jpeg
+            if j:
+                self.send(200, j, "image/jpeg")
+            else:
+                self.send(404, b"no stream", "text/plain")
+        else:
+            self.send(404, b"not found", "text/plain")
+
+    def body(self):
+        size = int(self.headers.get("Content-Length", 0))
+        if not 0 <= size <= 12_000_000:
+            return None
+        return self.rfile.read(size)
+
+    def do_POST(self):
+        url = urlparse(self.path)
+        q = parse_qs(url.query)
+        if url.path == "/snap":                      # live mode: browser sends a JPEG
+            body = self.body()
+            if not body:
+                return self.send(400, b"bad size", "text/plain")
+            with STATE.lock:
+                STATE.snap_n += 1
+                name = f"snap-{STATE.snap_n:04d}.jpg"
+                STATE.latest_img = name
+                enh = q.get("enh", ["0"])[0]
+                STATE.snap_enh[name] = enh if enh in ("auto", "strong", "waterfill") else None
+            (self.frames_dir / name).write_bytes(body)
+            if SESSION.active:
+                SESSION.event("snap_sent", id=name, reason=q.get("reason", [""])[0],
+                              enh=STATE.snap_enh.get(name))
+            if q.get("store", ["0"])[0] != "1":      # store=1: freshen only (for chat)
+                queue_check(name, q.get("reason", ["page settled"])[0])
+            self.send(200, json.dumps({"id": name}).encode(), "application/json")
+        elif url.path == "/chat":                    # typed or pen-pointed question
+            data = json.loads(self.body() or b"{}")
+            text = (data.get("text") or "").strip()[:2000]
+            anchor = data.get("anchor")
+            if isinstance(anchor, dict):        # twin-element or map-cell pointer
+                kind = anchor.get("kind")
+                try:
+                    if kind == "region":
+                        anchor = {"kind": "region",
+                                  "x": min(max(float(anchor["x"]), 0.0), 1.0),
+                                  "y": min(max(float(anchor["y"]), 0.0), 1.0)}
+                    elif kind in ("line", "equation", "problem") and str(anchor.get("text", "")).strip():
+                        anchor = {"kind": kind, "text": str(anchor["text"]).strip()[:300]}
+                    else:
+                        anchor = None
+                except (KeyError, TypeError, ValueError):
+                    anchor = None
+            else:
+                anchor = None
+            intent = data.get("intent") if data.get("intent") in CHAT_INTENTS else None
+            if intent and not text:
+                text = CHAT_INTENTS[intent][0]
+            if not text:
+                text = "What about this?" if anchor else ""
+            if not text:
+                return self.send(400, b"empty message", "text/plain")
+            with STATE.lock:
+                STATE.msg_id += 1
+                cid = STATE.msg_id
+            SESSION.event("chat_sent", id=cid, text=text, anchor=anchor, intent=intent)
+            threading.Thread(target=run_chat, args=(cid, text, anchor, self.frames_dir, intent),
+                             daemon=True).start()
+            self.send(200, json.dumps({"id": cid}).encode(), "application/json")
+        elif url.path == "/contrast":                # writing clarity: off/auto/strong
+            data = json.loads(self.body() or b"{}")
+            mode = data.get("mode")
+            if mode not in ("off", "auto", "strong"):   # legacy {"on": bool}
+                mode = "auto" if data.get("on", True) else "off"
+            with STATE.lock:
+                STATE.contrast = mode
+            SESSION.event("contrast_set", mode=mode)
+            self.send(200, json.dumps({"mode": mode}).encode(), "application/json")
+        elif url.path == "/dev":                     # study <-> dev mode (display only)
+            data = json.loads(self.body() or b"{}")
+            with STATE.lock:
+                STATE.dev = bool(data.get("on"))
+                on = STATE.dev
+            SESSION.event("dev_set", on=on)
+            self.send(200, json.dumps({"on": on}).encode(), "application/json")
+        elif url.path == "/view":                    # twin <-> ambient face (display only)
+            data = json.loads(self.body() or b"{}")
+            v = data.get("view")
+            if v not in ("twin", "ambient"):
+                return self.send(400, b"view must be twin or ambient", "text/plain")
+            with STATE.lock:
+                STATE.view = v
+            SESSION.event("view_set", view=v)
+            self.send(200, json.dumps({"view": v}).encode(), "application/json")
+        elif url.path == "/suggest":                 # improvement suggestion, with context
+            data = json.loads(self.body() or b"{}")
+            text = (data.get("text") or "").strip()[:1000]
+            if not text:
+                return self.send(400, b"empty suggestion", "text/plain")
+            with STATE.lock:
+                last = STATE.checks[0] if STATE.checks else {}
+                ctx = {"problem": STATE.problem, "last_check_id": last.get("id"),
+                       "snap": last.get("snap"), "frame": STATE.latest_img or STATE.frame,
+                       "mode": STATE.mode, "model": STATE.model,
+                       "contrast": STATE.contrast, "dev": STATE.dev}
+            # "run" always links the suggestion to its frames + run log, even
+            # when no session is recording (2026-10-29: 8 suggestions saved
+            # with session null and no way back to the run they described)
+            rec = {"ts": datetime.now().isoformat(timespec="seconds"), "text": text,
+                   "session": str(SESSION.dir) if SESSION.active else None,
+                   "t_ms": SESSION.t() if SESSION.active else None,
+                   "run": str(self.frames_dir), **ctx}
+            jl = Path.home() / "deskcap" / "suggestions.jsonl"   # survives any one bundle
+            jl.parent.mkdir(parents=True, exist_ok=True)
+            with open(jl, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+            SESSION.event("suggestion", **{k: v for k, v in rec.items() if k != "session"})
+            print(f"suggestion: {text[:80]}")
+            saved = [str(jl), str(RUNLOG.path)] + ([str(SESSION.dir)] if SESSION.active else [])
+            self.send(200, json.dumps({"saved": saved}).encode(), "application/json")
+        elif url.path == "/rate":                    # in-place rating of one note (no need to end)
+            data = json.loads(self.body() or b"{}")
+            verdict = data.get("verdict")
+            if verdict not in ("helped", "didnt", "wrong", ""):
+                return self.send(400, b"verdict must be helped, didnt or wrong", "text/plain")
+            try:
+                mid = int(data.get("id"))
+            except (TypeError, ValueError):
+                return self.send(400, b"id required", "text/plain")
+            wk = data.get("wrong_kind") if verdict == "wrong" else ""
+            wk = wk if wk in ("misread", "advice") else ""
+            rating = {"verdict": verdict, "wrong_kind": wk,
+                      "note": str(data.get("note") or "")[:500]}
+            with STATE.lock:
+                STATE.ratings[mid] = rating
+                msg = next((m for t in STATE.threads.values() for m in t
+                            if m.get("id") == mid and m["who"] == "cono"), None)
+                said = msg["text"] if msg else ""
+                kind = msg.get("kind") if msg else ""
+            with SESSION.lock:          # the manifest's own annotation, ready for End & rate
+                for c in SESSION.checks:
+                    if c.get("id") == mid:
+                        c["annotation"] = rating
+            SESSION.event("rating", id=mid, kind=kind, said=said[:300], **rating)
+            self.send(200, json.dumps({"id": mid, **rating}).encode(), "application/json")
+        elif url.path == "/pause":                   # pause/resume checking: camera stays on
+            data = json.loads(self.body() or b"{}")
+            with STATE.lock:
+                STATE.checks_paused = bool(data.get("on"))
+                on = STATE.checks_paused
+            if on:
+                with PENDING_LOCK:      # a queued automatic snap must not slip out after Pause
+                    PENDING[:] = [x for x in PENDING if x[1] in USER_REASONS]
+            SESSION.event("checks_paused" if on else "checks_resumed")
+            print("checking " + ("paused — nothing is sent" if on else "resumed"))
+            self.send(200, json.dumps({"on": on}).encode(), "application/json")
+        elif url.path == "/next":                    # problem card: Next button
+            with STATE.lock:
+                label = (STATE.problem or {}).get("label") or "the current problem"
+                STATE.next_from = label
+                mode, frame = STATE.mode, STATE.frame
+            SESSION.event("next_pressed", from_problem=label)
+            if mode != "live" and frame:             # live mode: the browser snaps
+                queue_check(frame, "next")
+            self.send(200, json.dumps({"from": label}).encode(), "application/json")
+        elif url.path == "/session/start":
+            meta = json.loads(self.body() or b"{}")
+            if not SESSION.active and STATE.mode not in ("live", "deskview"):
+                return self.send(400, b"demo/replay runs never record", "text/plain")
+            path = SESSION.start(meta)   # active session: merges meta; else resumes recording
+            self.send(200, json.dumps({"path": path}).encode(), "application/json")
+        elif url.path == "/session/frame" and SESSION.active:
+            body = self.body()
+            if not body:
+                return self.send(400, b"bad size", "text/plain")
+            with SESSION.lock:
+                SESSION.frame_n += 1
+                name = f"frame-{SESSION.frame_n:04d}.jpg"
+            (SESSION.dir / "frames" / name).write_bytes(body)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/signal" and SESSION.active:
+            pairs = json.loads(self.body() or b"[]")
+            with SESSION.lock:
+                with open(SESSION.dir / "signal.csv", "a") as f:
+                    f.writelines(f"{int(t)},{cf:.4f}\n" for t, cf in pairs)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/event":          # UI events: run log always, bundle if recording
+            ev = json.loads(self.body() or b"{}")
+            if ev.get("type") == "pause" and SESSION.active:
+                with SESSION.lock:
+                    SESSION.pauses += 1
+            SESSION.event(ev.pop("type", "event"), **ev)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/final" and SESSION.active:
+            body = self.body()
+            if body:
+                (SESSION.dir / "page-final.jpg").write_bytes(body)
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/end":
+            if SESSION.active and STATE.mode == "deskview" and STATE.frame:
+                try:        # no client camera: the latest captured frame is the final page
+                    shutil.copy(self.frames_dir / STATE.frame, SESSION.dir / "page-final.jpg")
+                except OSError:
+                    pass
+            result = SESSION.end("user")
+            self.send(200, json.dumps(result or {}).encode(), "application/json")
+        elif url.path == "/session/annotate":       # after end: merge annotations
+            notes = json.loads(self.body() or b"{}")
+            mf = SESSION.dir / "session.json" if SESSION.dir else None
+            if mf and mf.exists():
+                m = json.loads(mf.read_text())
+                by_snap = {a["snap"]: a for a in notes.get("checks", [])}
+                for c in m["checks"]:
+                    if c["snap"] in by_snap:
+                        a = by_snap[c["snap"]]
+                        c["annotation"] = {"verdict": a.get("verdict", ""),
+                                           "wrong_kind": a.get("wrong_kind", ""),
+                                           "note": a.get("note", "")}
+                m["annotations"] = {"stuck": notes.get("stuck", ""), "wanted": notes.get("wanted", "")}
+                mf.write_text(json.dumps(m, indent=1))
+            self.send(200, b"{}", "application/json")
+        elif url.path == "/session/delete":
+            d = SESSION.dir
+            if d and not SESSION.active and d.parent == Path.home() / "deskcap" \
+                    and d.name.startswith("session-") and d.exists():
+                shutil.rmtree(d)
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"no session to delete", "text/plain")
+        elif url.path == "/camera/retry":            # deskview: (re)launch deskcap — Continue / Reconnect / Skip set-up
+            if CAP["start"]:
+                setup = CAP.get("setup")
+                if setup and setup.poll() is None:
+                    CAP["setup_cancelled"] = True
+                    setup.terminate()
+                cap_kill()
+                with STATE.lock:
+                    STATE.cap_error = None
+                    STATE.cap_waiting = None
+                    STATE.cap_paused = False
+                CAP["proc"] = CAP["start"]()
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"camera not restartable", "text/plain")
+        elif url.path == "/camera/reframe":          # deskview: re-frame the desk crop in Apple's Desk View
+            if CAP["start"] and CAP.get("bin") and not STATE.cap_reframing:
+                cap_kill()                           # Desk View set-up wants the camera to itself
+                with STATE.lock:
+                    STATE.cap_reframing = True
+                    STATE.cap_error = None
+                    STATE.cap_waiting = None
+
+                def reframe():
+                    setup = CAP["setup"] = subprocess.Popen([CAP["bin"], "--setup"], stdout=subprocess.DEVNULL,
+                                                            stderr=subprocess.PIPE, text=True)
+                    _, errs = setup.communicate()
+                    cancelled = CAP.pop("setup_cancelled", False)   # user hit Skip: retry already relaunched
+                    with STATE.lock:
+                        STATE.cap_reframing = False
+                    if cancelled:
+                        return
+                    err = next((l for l in reversed(errs.splitlines()) if "deskcap:" in l), "")
+                    print("desk view set-up " + ("done" if setup.returncode == 0 else f"failed: {err}"))
+                    with STATE.lock:
+                        if setup.returncode:
+                            STATE.cap_error = err or "Desk View set-up didn't finish."
+                    if not CAP["stopping"] and not STATE.cap_paused and not setup.returncode:
+                        CAP["proc"] = CAP["start"]()
+                threading.Thread(target=reframe, daemon=True).start()
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"not in Desk View mode", "text/plain")
+        elif url.path == "/camera/pause":            # deskview: stop deskcap until Continue
+            if CAP["start"]:
+                cap_kill()
+                with STATE.lock:
+                    STATE.cap_error = None
+                    STATE.cap_waiting = None
+                    STATE.cap_paused = True
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(400, b"camera not pausable", "text/plain")
+        elif url.path == "/retry":                   # re-run a failed check
+            name = Path(q.get("snap", [""])[0]).name
+            if (self.frames_dir / name).exists():
+                queue_check(name, "retry")
+                self.send(200, b"{}", "application/json")
+            else:
+                self.send(404, b"no snap", "text/plain")
+        elif url.path == "/check":                   # replay mode: Check now
+            with STATE.lock:
+                STATE.check_asap = True
+            self.send(200, b"{}", "application/json")
+        else:
+            self.send(404, b"not found", "text/plain")
+
+
+def doctor():
+    """Preflight for running in the real world (e.g. before class)."""
+    import tempfile
+    ok = True
+
+    def row(good, label, fix=""):
+        nonlocal ok
+        ok = ok and bool(good)
+        print(("  ✓ " if good else "  ✗ ") + label)
+        if not good and fix:
+            print(f"      → {fix}")
+
+    print("Cono — preflight\n")
+    row(shutil.which("claude"), "claude CLI installed",
+        "install Claude Code (https://claude.com/claude-code), run `claude` once to log in")
+    if shutil.which("claude"):
+        h = subprocess.run(["claude", "--help"], capture_output=True, text=True, timeout=30)
+        row("--include-partial-messages" in h.stdout, "claude CLI supports streaming output",
+            "update Claude Code: `claude update` (streamed checks need --include-partial-messages)")
+    row(shutil.which("sips"), "sips available (image downscaling)", "macOS built-in — are you on macOS?")
+    bin_ = None
+    try:
+        bin_ = ensure_deskcap()
+        row(True, "deskcap capture tool ready")
+    except SystemExit as e:
+        row(False, "deskcap capture tool ready", str(e))
+    listing = None
+    if bin_:
+        lp = subprocess.Popen([str(bin_), "--list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            listing = "".join(lp.communicate(timeout=20))
+        except subprocess.TimeoutExpired:
+            lp.kill()                                # don't wait: a wedged camera client may never exit
+            row(False, "camera system responding",
+                "listing cameras hung — the macOS camera service is wedged; quit other camera apps, "
+                "unplug/re-lock the iPhone, and if it persists restart the Mac")
+    if listing is not None:
+        has_dv = "deskviewcamera" in listing.lower()
+        row(has_dv, "Desk View camera present",
+            "needs an M4-or-later Mac, or an iPhone 11+ mounted on the lid via Continuity Camera "
+            "(locked, same Apple ID, Bluetooth on) — otherwise use `cono browser`")
+        with tempfile.TemporaryDirectory() as td:
+            p = subprocess.Popen([str(bin_), "--device", "deskview" if has_dv else "default",
+                                  "--interval", "1", "--count", "1", "--out", td],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                _, err = p.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                err = b""
+            errs = err.decode(errors="replace")
+            denied = "permission denied" in errs
+            got = any(Path(td).glob("frame-*.jpg"))
+            row(got, "camera capture works from this terminal",
+                "allow camera for your terminal app: System Settings → Privacy & Security → Camera"
+                if denied else "close other camera apps (FaceTime, old cono tabs) and re-run")
+    print("\nAll good — run `cono` and get to work." if ok
+          else "\nFix the ✗ items above, then re-run `cono doctor`.")
+    sys.exit(0 if ok else 1)
+
+
+def main():
+    args = sys.argv[1:]
+    if "doctor" in args:
+        doctor()
+    model, port, replay_dir = "opus", 8764, None
+    open_browser = "--no-open" not in args
+    if "--no-contrast" in args:
+        with STATE.lock:
+            STATE.contrast = "off"
+    args = [a for a in args if a not in ("--no-open", "--no-contrast")]
+    if "--contrast" in args:
+        i = args.index("--contrast")
+        v = args[i + 1]
+        if v not in ("off", "auto", "strong"):
+            sys.exit("--contrast takes off, auto, or strong")
+        with STATE.lock:
+            STATE.contrast = v
+        del args[i:i + 2]
+    for flag, cast in (("--model", str), ("--port", int), ("--replay", str)):
+        if flag in args:
+            i = args.index(flag)
+            v = cast(args[i + 1])
+            model, port, replay_dir = (
+                v if flag == "--model" else model,
+                v if flag == "--port" else port,
+                v if flag == "--replay" else replay_dir,
+            )
+            del args[i:i + 2]
+    if "--no-record" in args:
+        args.remove("--no-record")
+        with STATE.lock:
+            STATE.record = False
+    if "--dev" in args:
+        args.remove("--dev")
+        with STATE.lock:
+            STATE.dev = True
+    if "--view" in args:
+        i = args.index("--view")
+        v = args[i + 1]
+        if v not in ("twin", "ambient"):
+            sys.exit("--view takes twin or ambient")
+        with STATE.lock:
+            STATE.view = v
+        del args[i:i + 2]
+    if "demo" in args:
+        replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
+    if "session" in args:               # no-op alias from the 10-minute era
+        args.remove("session")
+        print("note: recording is always on in live modes now — `session` does nothing "
+              "(opt out with --no-record)")
+    # Desk View IS the product: top-down on the page is the default; the
+    # browser camera (selfie view) is the explicit fallback, never the default.
+    deskview = not replay_dir and not ("live" in args or "browser" in args)
+
+    if not shutil.which("claude"):
+        sys.exit("The `claude` CLI is required (it does the reading): https://claude.com/claude-code\n"
+                 "Install it, run `claude` once to log in, then rerun cono.")
+
+    out = Path.home() / "deskcap" / ("check-" + datetime.now().strftime("%Y-%m-%d-%H%M%S"))
+    out.mkdir(parents=True, exist_ok=True)
+
+    with STATE.lock:
+        STATE.model = model
+        STATE.mode = "replay" if replay_dir else "deskview" if deskview else "live"
+
+    cap = None
+    if replay_dir:
+        threading.Thread(target=replay, args=(Path(replay_dir).expanduser(), out), daemon=True).start()
+        threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
+    elif deskview:
+        deskcap_bin = os.environ.get("CONO_DESKCAP") or str(ensure_deskcap())
+        CAP["bin"] = deskcap_bin
+
+        def start_cap():
+            proc = subprocess.Popen(
+                [deskcap_bin, "--device", "deskview", "--interval", "1",
+                 "--stream", "12", "--out", str(out)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            threading.Thread(target=stream_reader, args=(proc.stdout,), daemon=True).start()
+
+            def cap_watch():
+                lines = []
+                for raw in proc.stderr:
+                    l = raw.decode(errors="replace").strip()
+                    if not l:
+                        continue
+                    lines.append(l)
+                    if "deskcap status:" in l:        # waiting … | lost … | live
+                        msg = l.split("deskcap status:", 1)[1].strip()
+                        with STATE.lock:
+                            STATE.cap_waiting = None if msg == "live" else msg
+                        print("camera " + ("back" if msg == "live" else msg.split(" — ")[0]))
+                proc.wait()
+                if CAP["stopping"] or proc.pid in CAP["killed"]:
+                    CAP["killed"].discard(proc.pid)
+                    return
+                err = next((l for l in reversed(lines) if "deskcap:" in l), "")
+                with STATE.lock:
+                    STATE.cap_waiting = None
+                    STATE.cap_error = err or \
+                        "The Desk View camera stopped — it may be in use by another app."
+                print(f"deskcap exited: {STATE.cap_error}")
+                if "permission denied" not in err:  # anything else is worth another try
+                    time.sleep(3)
+                    if not CAP["stopping"] and CAP["proc"] is proc:
+                        with STATE.lock:
+                            STATE.cap_error = None
+                        CAP["proc"] = start_cap()
+            threading.Thread(target=cap_watch, daemon=True).start()
+            return proc
+
+        CAP["start"] = start_cap
+        CAP["proc"] = cap = start_cap()
+        threading.Thread(target=watcher, args=(out / "log.csv", out), daemon=True).start()
+    for _ in range(2):      # two workers: a slow check never blocks the next
+        threading.Thread(target=checker, args=(out,), daemon=True).start()
+
+    Handler.frames_dir = out
+    RUNLOG.path = out / "run.jsonl"
+    RUNLOG.write("run_start", mode=STATE.mode, model=model, record=STATE.record,
+                 contrast=STATE.contrast, dev=STATE.dev)
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+    def stop(*_):
+        CAP["stopping"] = True
+        if CAP["proc"]:
+            CAP["proc"].terminate()
+        elif cap:
+            cap.terminate()
+        if SESSION.active:              # server stop still lands a scoreable bundle
+            if STATE.mode == "deskview" and STATE.frame:
+                try:
+                    shutil.copy(out / STATE.frame, SESSION.dir / "page-final.jpg")
+                except OSError:
+                    pass
+            SESSION.end("server-stop")
+        print(f"\nstopped. snaps kept in {out}")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+
+    # TESTDEV: live modes record from launch — demo/replay never do
+    if STATE.mode in ("live", "deskview") and STATE.record:
+        SESSION.start({"camera_label": "Desk View (deskcap)" if deskview else ""})
+    elif STATE.mode in ("live", "deskview"):
+        print("recording: OFF (--no-record)")
+
+    print(f"Cono — http://localhost:{port}  ({STATE.mode}, model: {model})")
+    print(f"snaps: {out}  ·  Ctrl-C to stop")
+    if open_browser:
+        subprocess.Popen(["open", f"http://localhost:{port}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
