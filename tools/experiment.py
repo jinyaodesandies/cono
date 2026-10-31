@@ -5,8 +5,7 @@ A live session can only test what the student experiences (feedback style,
 timing). Everything else — snap frequency, image preprocessing, prompt
 structure — is better tested offline: same recorded frames, every config,
 directly comparable. This runs that matrix against any capture directory
-(a deskcap dir with log.csv, the bundled sample, or a session bundle's
-frames) and writes a side-by-side report.
+(a deskcap dir with log.csv, or a session bundle's frames) and writes a side-by-side report.
 
 Usage:
   tools/experiment.py DIR [DIR2 …] [--model sonnet] [--workers 4]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Contract regression: the reply keeps its shape at the visibility floor.
 
-Builds a deliberately unreadable frame (a committed sample frame destroyed
+Builds a deliberately unreadable frame (a real recorded frame destroyed
 by down-and-up scaling - the run1 "total-failure floor"), sends it through
 the real check prompt, and asserts the contract holds where it has broken
 before (agent-report 14, class C):
@@ -13,7 +13,8 @@ before (agent-report 14, class C):
     test/demo/sample", no "you uploaded/pasted"
 
 Costs one `claude` call per run; it is a dev/regression tool, not part of
-doctor. Usage: tools/regress-contract.py [model]   (default: opus)
+doctor. Usage: tools/regress-contract.py [model] [--frame JPG]   (default:
+opus, and the newest frame recorded in ~/deskcap)
 """
 import importlib.machinery
 import importlib.util
@@ -36,8 +37,18 @@ META_RE = re.compile(
 
 
 def main():
-    model = sys.argv[1] if len(sys.argv) > 1 else "opus"
-    src = HERE / "sample" / "frame-0001.jpg"
+    args = sys.argv[1:]
+    src = None
+    if "--frame" in args:
+        i = args.index("--frame")
+        src = Path(args[i + 1]).expanduser()
+        del args[i:i + 2]
+    model = args[0] if args else "opus"
+    if src is None:
+        frames = sorted(Path.home().glob("deskcap/*/frame-0001.jpg"), key=lambda p: p.stat().st_mtime)
+        if not frames:
+            sys.exit("no recorded frame in ~/deskcap — run cono once, or pass --frame JPG")
+        src = frames[-1]
     with tempfile.TemporaryDirectory() as td:
         tiny = Path(td) / "tiny.jpg"
         floor = Path(td) / "floor.jpg"
