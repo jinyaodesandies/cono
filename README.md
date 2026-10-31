@@ -12,51 +12,56 @@ This is the checking component of Cono, an AI study tutor that watches
 paper while you work. It runs locally: your browser does the watching,
 and a small Python server runs the reading through the `claude` CLI.
 
-## Try it in one line
+## Try it on your own work
 
-No camera needed — this replays a bundled sample session (a student
-factoring a quadratic, with a mistake in it) through the full pipeline:
+Grab whatever you're working on — a problem set, a worksheet, a page of
+notes — and a pen.
+
+**What you need**
+
+- A Mac with Python 3 (nothing to `pip install`).
+- The [Claude Code CLI](https://claude.com/claude-code), installed and
+  logged in — `claude` does the reading, so there's no API key setup.
+  Checks run on your own Claude login and count against its usage; the
+  default model is opus (`--model sonnet` is lighter).
+- A camera that can see your page, one of:
+  - **built-in Desk View** (M4-and-later Macs) — the intended setup;
+  - **an iPhone as the Desk View camera** via Continuity Camera, on any
+    Mac with macOS 13+ ([setup below](#camera-setup));
+  - **any other camera** the browser can see, with `cono browser`.
+
+  Desk View needs the Xcode command line tools (`xcode-select --install`)
+  to build the small capture tool on first run.
+
+**Three commands**
 
 ```bash
-git clone https://github.com/jinyaodesandies/cono && cono/cono demo
+git clone https://github.com/jinyaodesandies/cono
+cono/cono doctor     # ten-second preflight: claude, camera, Desk View — with a fix for anything missing
+cono/cono            # start (or `cono/cono browser` without Desk View)
 ```
 
-Your browser opens to the session; within seconds the twin fills in —
-problem card, relations, readability map — and the first note lands in
-the dialogue, pointing at the factoring error without giving away the
-fix. Type back at it, or click a spot on the page image to ask about
-exactly that spot. There's a chemistry version too — `cono demo
-chem` replays a stoichiometry page with a mis-balanced equation and a
-significant-figures slip.
+Your browser opens to Cono with the camera view at the side. Frame your
+page (the "Re-frame Desk View" button helps), then just work. Each time
+you pause writing, Cono reads the page and the twin fills in — the
+problem you're on, the relations it runs on, a map of what it could
+read — and a note lands in the dialogue when there's something to say:
+where a mistake is and a question to get you moving, never the corrected
+answer. Type back at it, or click any part of the twin to ask about
+exactly that. "Check now" checks immediately; Ctrl-C in the terminal
+stops it.
 
-## What you need
+Good to know: Cono is in test-development mode, so every live run keeps
+photos of your page and a log of its notes in `~/deskcap/` on your
+machine — the snapshots it read and a run log always, plus a full
+session recording unless you start with `--no-record` (see
+[below](#every-live-run-is-recorded-testdev-mode)). Nothing leaves your
+Mac except what's read through your own `claude` login: the snapshots,
+close-up crops, and anything you type.
 
-- **For the demo:** a Mac, Python 3 (nothing to `pip install`), and the
-  [Claude Code CLI](https://claude.com/claude-code) installed and logged
-  in — `claude` does the reading, so there's no API key setup. Checks run
-  on your own Claude login and count against its usage; the default
-  model is opus (`--model sonnet` is lighter).
-- **For your own paper**, one of:
-  - a Mac with built-in Desk View (M4 and later) — the intended setup;
-  - any Mac on macOS 13+ with an iPhone as the Desk View camera via
-    Continuity Camera (steps below);
-  - anything else: `cono browser`, with any camera the browser can see.
+## Camera setup
 
-  Desk View modes also need the Xcode command line tools
-  (`xcode-select --install`) to build the small capture tool on first
-  run.
-- **Run `cono/cono doctor` first** — a ten-second check of all of the
-  above, with a fix for anything missing.
-
-Good to know before a live run: Cono is in test-development mode, so
-every live run keeps photos of your page and a log of its notes in
-`~/deskcap/` on your machine — the snapshots it read and a run log
-always, plus a full session recording unless you start with
-`--no-record` (see [below](#every-live-run-is-recorded-testdev-mode)).
-Nothing leaves your Mac except what's read through your own `claude`
-login: the snapshots, close-up crops, and anything you type.
-
-## Use it on your own work
+The camera modes in detail:
 
 ```bash
 cono/cono            # the Desk View camera — top-down on your page
@@ -130,6 +135,7 @@ Other flags:
 ```bash
 cono --model opus          # pick the model (default: opus)
 cono --replay DIR          # replay any recorded session directory
+cono demo                  # development: replay the bundled sample page (demo chem = chemistry)
 cono --port 9000           # serve somewhere else (default: 8764)
 cono --contrast strong     # writing clarity: off | auto (default) | strong
 cono --no-contrast         # same as --contrast off
