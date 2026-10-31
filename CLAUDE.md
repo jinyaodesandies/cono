@@ -25,9 +25,13 @@
   pipeline, requirements, or the UI's behavior, fix the README before
   you're done. Keep its usage examples matching the docstring in
   `cono` — they drift independently otherwise.
-- The one-line try in the README (`cono demo`) must keep working
-  for a fresh clone with only Python 3 + the `claude` CLI: no camera, no
-  Xcode, no pip installs, no JS build step.
+- The README's "Try it on your own work" path (clone → `cono doctor` →
+  `cono`) must keep working for a fresh clone with Python 3 + the
+  `claude` CLI and a camera: no pip installs, no JS build step (Xcode
+  CLT only for the Desk View capture tool). No bundled or simulated
+  handwriting samples — Yao's call (2026-10-31): people try it on their
+  own work; tests use real recordings in `~/deskcap` or synthetic
+  non-handwriting frames.
 - Live capture is browser-side (getUserMedia + client gating); the
   server only receives snaps and runs `claude`. Keep gating thresholds
   in index.html and cono in sync (DIRTY_AT 0.20 / STABLE_AT 0.10,
@@ -37,10 +41,6 @@
   photo-pipeline harness). Clarity passes stay grayscale/continuous.
   And never send the model images wider than ~1280 px: the API clamps
   at ~1.15 MP, so wider frames get resampled twice and read WORSE.
-- If the check prompt or gating thresholds change, rerun
-  `tools/make-sample.py` only if the sample itself needs to change — the
-  committed frames are the stable test fixture (`sample/` math,
-  `sample-chem/` chemistry via tools/make-chem-sample.py).
 - The model reply contract is VISIBILITY / WORKING ON / PROBLEM / ON PAGE /
   TALLY / CHECK / KIND(confirm|fix|idle|setup) / GRID / EQUATIONS, in that
   order — fast fields first, because the reply streams (claude -p
@@ -78,8 +78,8 @@
   keep it working until collaborators' rigs have migrated. Machine-compat
   names stay stable through the rename: CONO_* env vars, session bundle
   field names, and `~/deskcap` paths are unchanged.
-- Test end-to-end cheaply: `cono demo` / `demo chem`, POST session
-  snaps from `~/deskcap/session-*/snaps/` to /snap, and the stub capture
+- Test end-to-end cheaply: `cono --replay` a recorded `~/deskcap` run,
+  POST session snaps from `~/deskcap/session-*/snaps/` to /snap, and the stub capture
   tool pattern (CONO_DESKCAP env) for deskview flows.
 - This directory is its own git repo (published separately); the
   surrounding `cono/` repo holds private research and captures that must

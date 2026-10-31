@@ -2,8 +2,7 @@
 """Offline self-test: no camera, no `claude` calls, stdlib only (the no-page
 gate check is skipped without Pillow). Covers the pure logic the 2026-10-29
 round added: the EQUATIONS "same" token saver, the answered-problem note,
-page-level messages staying in view, the no-page gate on the committed
-samples, and the run log. Usage: tools/selftest.py"""
+page-level messages staying in view, the no-page gate, and the run log. Usage: tools/selftest.py"""
 import importlib.machinery
 import importlib.util
 import json
@@ -62,11 +61,12 @@ with cc.STATE.lock:
     check("trick-question scan note reaches the chat prompt", "page scan" in p and "opens with the answer" in p)
 
 if cc.PIL_OK:
-    samples = sorted((HERE / "sample").glob("*.jpg")) + sorted((HERE / "sample-chem").glob("*.jpg"))
-    fr = [cc.paper_frac(s) for s in samples]
-    check("no-page gate never fires on the committed sample pages",
-          all(f is not None and f >= cc.NO_PAGE_AT for f in fr), f"min paper {min(fr):.3f} over {len(fr)}")
+    # real recorded pages are measured by tools/eval-no-page.py; here, a plain
+    # paper-colored frame stands in for "a page is in view"
     with tempfile.TemporaryDirectory() as d:
+        page = Path(d) / "page.jpg"
+        cc._PILImage.new("RGB", (640, 480), (244, 239, 228)).save(page)
+        check("no-page gate never fires on a frame full of paper", cc.paper_frac(page) >= cc.NO_PAGE_AT)
         dark = Path(d) / "lap.jpg"
         cc._PILImage.new("RGB", (640, 480), (150, 40, 40)).save(dark)
         check("no-page gate fires on a frame with no paper", cc.paper_frac(dark) < cc.NO_PAGE_AT)

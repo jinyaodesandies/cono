@@ -37,7 +37,6 @@ new" that contradicts the page-change signal is suppressed as a misfire.
 Usage:
   cono                     # the Desk View camera (top-down on your desk) - the default
   cono browser             # fallback: any browser camera (iPhone Continuity, webcam)
-  cono demo                # no camera needed: bundled sample session (demo chem = chemistry)
   cono doctor              # preflight: is everything ready to run?
   cono --model sonnet      # pick the model (default: opus)
   cono --replay DIR        # replay any recorded session directory
@@ -120,7 +119,7 @@ except Exception:
 
 try:
     # optional, never required: server-side contrast normalization for frames
-    # that don't pass through the browser canvas (deskview, replay, demo)
+    # that don't pass through the browser canvas (deskview, replay)
     from PIL import Image as _PILImage, ImageOps as _PILImageOps
     PIL_OK = True
 except ImportError:
@@ -135,7 +134,6 @@ except ImportError:
 
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.html"
-SAMPLE = HERE / "sample"
 
 
 def ensure_deskcap():
@@ -1843,7 +1841,7 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/session/start":
             meta = json.loads(self.body() or b"{}")
             if not SESSION.active and STATE.mode not in ("live", "deskview"):
-                return self.send(400, b"demo/replay runs never record", "text/plain")
+                return self.send(400, b"replay runs never record", "text/plain")
             path = SESSION.start(meta)   # active session: merges meta; else resumes recording
             self.send(200, json.dumps({"path": path}).encode(), "application/json")
         elif url.path == "/session/frame" and SESSION.active:
@@ -2077,8 +2075,9 @@ def main():
         with STATE.lock:
             STATE.view = v
         del args[i:i + 2]
-    if "demo" in args:
-        replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
+    if "demo" in args:                  # the bundled simulated-handwriting sample is gone
+        sys.exit("`cono demo` was removed — run `cono` on your own page "
+                 "(or `cono --replay DIR` for a recorded session)")
     if "session" in args:               # no-op alias from the 10-minute era
         args.remove("session")
         print("note: recording is always on in live modes now — `session` does nothing "
@@ -2175,7 +2174,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
-    # TESTDEV: live modes record from launch — demo/replay never do
+    # TESTDEV: live modes record from launch — replay never does
     if STATE.mode in ("live", "deskview") and STATE.record:
         SESSION.start({"camera_label": "Desk View (deskcap)" if deskview else ""})
     elif STATE.mode in ("live", "deskview"):
