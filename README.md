@@ -38,7 +38,7 @@ notes — and a pen.
 ```bash
 git clone https://github.com/jinyaodesandies/cono
 cono/cono doctor     # ten-second preflight: claude, camera, Desk View — with a fix for anything missing
-cono/cono            # start (or `cono/cono browser` without Desk View)
+cono/cono            # start — uses Desk View (only on a Mac without it: cono/cono browser)
 ```
 
 Your browser opens to Cono with the camera view at the side. Frame your
@@ -114,7 +114,11 @@ Desk View — it works with any camera the browser can see:
 the built-in one (hold the page up facing the screen), a webcam, or an
 iPhone near your Mac via Continuity Camera — pick one from the camera
 menu under the video. If the picture keeps cropping to your face, turn
-off Center Stage in Control Center → Video Effects.
+off Center Stage in Control Center → Video Effects. On a Mac that does
+have a Desk View camera (built in, or an iPhone mounted on the lid),
+`cono browser` checks first and uses Desk View anyway — saying so in the
+terminal — so the camera never ends up on your face by accident;
+`cono browser --force` uses the browser camera regardless.
 
 Either way: when you pause writing, Cono snaps one frame, reads it, and
 the twin updates. There's a "Check now" button when you don't want to
