@@ -18,6 +18,7 @@ Usage:
   cono-check demo                # no camera needed: bundled sample session (demo chem = chemistry)
   cono-check doctor              # preflight: is everything ready to run?
   cono-check --model opus        # pick the model (default: sonnet)
+  cono-check --model ollama:qwen3.5:9b   # local open model via Ollama (app running, `ollama pull qwen3.5:9b`)
   cono-check --replay DIR        # replay any recorded session directory
   cono-check --port 9000
   cono-check --no-open           # don't open the browser automatically
@@ -383,12 +384,47 @@ def shrink_for_model(path, width=1280):
     return small if r.returncode == 0 and small.exists() else path
 
 
-def claude_call(prompt, model, read=True):
+def claude_call(prompt, model, read=True, image=None):
+    """One model call. `model` is a claude CLI alias (sonnet, opus, ...) or
+    "ollama:<name>", which routes the same prompt to a local Ollama server.
+    `image` is the snap to attach: the claude CLI opens it itself through
+    its Read tool (the prompt names the path), so only Ollama uses it."""
+    if model.startswith("ollama:"):
+        return ollama_call(prompt, model[len("ollama:"):], image)
     cmd = ["claude", "-p", "--model", model]
     if read:
         cmd.append("--allowedTools=Read")
     r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=120)
     return r.stdout.strip() or r.stderr.strip() or "(no response)"
+
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+
+
+def ollama_call(prompt, model, image=None):
+    """POST one chat turn to a local Ollama server — standard library only,
+    so a fresh clone still needs no pip installs. Returns the reply text;
+    raises RuntimeError with a plain-English message when Ollama is down
+    or rejects the request (e.g. the model isn't pulled)."""
+    import base64, urllib.error, urllib.request
+    msg = {"role": "user", "content": prompt}
+    if image:
+        msg["images"] = [base64.b64encode(Path(image).read_bytes()).decode("ascii")]
+    body = json.dumps({"model": model, "messages": [msg], "stream": False,
+                       "think": False, "options": {"temperature": 0}}).encode()
+    req = urllib.request.Request(OLLAMA_URL, data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            reply = json.load(r)
+    except urllib.error.HTTPError as e:                # server answered, but with an error
+        detail = e.read().decode(errors="replace")[:300]
+        hint = f" — run `ollama pull {model}`" if "not found" in detail else ""
+        raise RuntimeError(f"Ollama rejected the request ({e.code}): {detail}{hint}") from None
+    except urllib.error.URLError:                      # nothing listening at all
+        raise RuntimeError("Ollama isn't reachable at localhost:11434 — open the Ollama app, "
+                           "then retry.") from None
+    return (reply.get("message") or {}).get("content", "").strip() or "(no response)"
 
 
 def checker(frames_dir):
@@ -414,7 +450,7 @@ def checker(frames_dir):
         try:
             send = shrink_for_model(frames_dir / snap, cfg["width"])
             if cfg["structure"] == "twopass":
-                raw1 = claude_call(TRANSCRIBE_PROMPT.format(path=send), STATE.model)
+                raw1 = claude_call(TRANSCRIBE_PROMPT.format(path=send), STATE.model, image=send)
                 entry.update(parse_report(raw1))
                 raw2 = claude_call(REASON_PROMPT.format(
                     transcript=entry.get("on_page") or "(nothing transcribed)",
@@ -431,17 +467,19 @@ def checker(frames_dir):
                                                 check_style=CHECK_STYLES[cfg["style"]],
                                                 no_new_rule="" if reason == "stuck?" else NO_NEW_RULE,
                                                 escalation=extra),
-                                  STATE.model)
+                                  STATE.model, image=send)
                 entry.update(parse_report(raw))
             with STATE.lock:            # remember what we saw and said
                 if entry.get("on_page") and entry.get("kind") != "setup":
                     STATE.last_on_page = entry["on_page"]
                 if entry.get("check") and entry.get("kind") in ("confirm", "fix"):
                     STATE.last_checks = (STATE.last_checks + [entry["check"]])[-3:]
-        except Exception:
+        except Exception as e:
+            why = str(e) if STATE.model.startswith("ollama:") else \
+                  "Check that `claude` runs in your terminal, then retry."
+            print(f"check failed: {e}", file=sys.stderr)
             entry.update(visibility=None, visibility_note="", on_page="", failed=True,
-                         check="Couldn't read this snapshot. Check that `claude` runs "
-                               "in your terminal, then retry.")
+                         check=f"Couldn't read this snapshot. {why}")
         latency = int((time.time() - t0) * 1000)
         if in_session and SESSION.active:
             try:
@@ -758,7 +796,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, b"not found", "text/plain")
 
 
-def doctor():
+def doctor(model="sonnet"):
     """Preflight for running in the real world (e.g. before class)."""
     import tempfile
     ok = True
@@ -771,8 +809,20 @@ def doctor():
             print(f"      → {fix}")
 
     print("Cono check — preflight\n")
-    row(shutil.which("claude"), "claude CLI installed",
-        "install Claude Code (https://claude.com/claude-code), run `claude` once to log in")
+    if model.startswith("ollama:"):
+        name, pulled = model[len("ollama:"):], None
+        try:
+            import urllib.request
+            with urllib.request.urlopen(OLLAMA_URL.replace("/api/chat", "/api/tags"), timeout=5) as r:
+                pulled = [m["name"] for m in json.load(r).get("models", [])]
+        except Exception:
+            pass
+        row(pulled is not None, "Ollama running at localhost:11434", "open the Ollama app")
+        if pulled is not None:
+            row(name in pulled, f"Ollama model {name} pulled", f"ollama pull {name}")
+    else:
+        row(shutil.which("claude"), "claude CLI installed",
+            "install Claude Code (https://claude.com/claude-code), run `claude` once to log in")
     row(shutil.which("sips"), "sips available (image downscaling)", "macOS built-in — are you on macOS?")
     bin_ = None
     try:
@@ -817,8 +867,6 @@ def doctor():
 
 def main():
     args = sys.argv[1:]
-    if "doctor" in args:
-        doctor()
     model, port, replay_dir = "sonnet", 8763, None
     open_browser = "--no-open" not in args
     args = [a for a in args if a != "--no-open"]
@@ -832,6 +880,8 @@ def main():
                 v if flag == "--replay" else replay_dir,
             )
             del args[i:i + 2]
+    if "doctor" in args:
+        doctor(model)
     if "demo" in args:
         replay_dir = str(HERE / "sample-chem") if "chem" in args else str(SAMPLE)
     if "session" in args:
@@ -841,7 +891,7 @@ def main():
     # browser camera (selfie view) is the explicit fallback, never the default.
     deskview = not replay_dir and not ("live" in args or "browser" in args)
 
-    if not shutil.which("claude"):
+    if not model.startswith("ollama:") and not shutil.which("claude"):
         sys.exit("The `claude` CLI is required (it does the reading): https://claude.com/claude-code\n"
                  "Install it, run `claude` once to log in, then rerun cono-check.")
 

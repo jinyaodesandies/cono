@@ -27,6 +27,8 @@ equation and a significant-figures slip.
 
 You need macOS, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
 installed and logged in (`claude` does the reading — no API key setup).
+To try a local open-source model instead, see `--model ollama:<name>`
+under "Other flags".
 
 ## Use it on your own work
 
@@ -92,10 +94,18 @@ Other flags:
 
 ```bash
 cono-check --model opus          # pick the model (default: sonnet)
+cono-check --model ollama:qwen3.5:9b   # a local open-source vision model via Ollama (see below)
 cono-check --replay DIR          # replay any recorded session directory
 cono-check --port 9000           # serve somewhere else (default: 8763)
 cono-check --no-open             # don't open the browser automatically
 ```
+
+`--model ollama:<name>` sends every check to a local
+[Ollama](https://ollama.com) server at `localhost:11434` instead of the
+`claude` CLI, so you can compare a local open-source vision model in the
+same demo: it needs the Ollama app running and the model pulled
+(`ollama pull qwen3.5:9b`). `cono-check doctor --model ollama:<name>`
+checks those two things in place of the `claude` CLI.
 
 ## Record a 10-minute session
 
