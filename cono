@@ -36,7 +36,8 @@ new" that contradicts the page-change signal is suppressed as a misfire.
 
 Usage:
   cono                     # the Desk View camera (top-down on your desk) - the default
-  cono browser             # fallback: any browser camera (iPhone Continuity, webcam)
+  cono browser             # fallback for Macs without Desk View: any browser camera
+                           #   (on a Mac with Desk View it uses Desk View; --force overrides)
   cono doctor              # preflight: is everything ready to run?
   cono --model sonnet      # pick the model (default: opus)
   cono --replay DIR        # replay any recorded session directory
@@ -163,6 +164,17 @@ def ensure_deskcap():
     else:
         hint = "\n".join(l.strip() for l in err.splitlines() if "error:" in l)[:600] or err[-600:]
     sys.exit(f"deskcap is needed for Desk View and couldn't be built — {hint}")
+
+
+def list_cameras(bin_):
+    """deskcap --list output, or None if the camera service doesn't answer
+    in 20 s (a wedged camera client may never exit, so don't wait on it)."""
+    lp = subprocess.Popen([str(bin_), "--list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        return "".join(lp.communicate(timeout=20))
+    except subprocess.TimeoutExpired:
+        lp.kill()
+        return None
 
 # server-side gating for replay/deskview (live mode gates in the browser
 # with the same numbers). The live video stream is display-only — Claude
@@ -1998,11 +2010,8 @@ def doctor():
         row(False, "deskcap capture tool ready", str(e))
     listing = None
     if bin_:
-        lp = subprocess.Popen([str(bin_), "--list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            listing = "".join(lp.communicate(timeout=20))
-        except subprocess.TimeoutExpired:
-            lp.kill()                                # don't wait: a wedged camera client may never exit
+        listing = list_cameras(bin_)
+        if listing is None:
             row(False, "camera system responding",
                 "listing cameras hung — the macOS camera service is wedged; quit other camera apps, "
                 "unplug/re-lock the iPhone, and if it persists restart the Mac")
@@ -2085,6 +2094,18 @@ def main():
     # Desk View IS the product: top-down on the page is the default; the
     # browser camera (selfie view) is the explicit fallback, never the default.
     deskview = not replay_dir and not ("live" in args or "browser" in args)
+    if not replay_dir and not deskview and "--force" not in args:
+        # browser mode is the fallback for Macs WITHOUT Desk View; on a Mac that
+        # has one, asking for it would silently point Cono at the student's face
+        try:
+            listing = list_cameras(ensure_deskcap())
+        except SystemExit:              # no Xcode tools: can't check, honor the fallback
+            listing = None
+        if listing and "deskviewcamera" in listing.lower():
+            deskview = True
+            print("This Mac has a Desk View camera — using it instead of the browser camera.\n"
+                  "(`cono browser` is the fallback for Macs without Desk View; "
+                  "`cono browser --force` uses the browser camera anyway.)")
 
     if not shutil.which("claude"):
         sys.exit("The `claude` CLI is required (it does the reading): https://claude.com/claude-code\n"
